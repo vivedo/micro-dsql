@@ -251,7 +251,7 @@ statement fails, with which SQLSTATE and text, and the final data.
   rows (no `55P03`, no OC000 for disjoint writes).
 - **FR-003**: When autocommit execution of a DML or DDL statement (including a transaction
   micro-dsql opens itself for one client DDL statement) meets engine lock contention, micro-dsql
-  MUST retry the statement transparently for a bounded time (default: up to 10 attempts, at most about 200 ms in
+  MUST retry the statement transparently for a bounded time (a fixed bound: up to 10 attempts, at most about 200 ms in
   total) before reporting an error; nothing is applied by a failed attempt.
 - **FR-004**: The client MUST never receive SQLSTATE `55P03`. Lock contention that remains after
   FR-003, or occurs inside an explicit transaction, MUST be reported as `40001` with the OC001

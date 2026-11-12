@@ -90,7 +90,7 @@ multi-statement strings; residual contention retried, else OC001.
 
 ### Tests (write first, must fail)
 
-- [ ] T020 [P] [US2] In `tests/occ/matrix.rs`: cells M1 (UPDATE/UPDATE, both orders of A-commit vs B-write: S1, S1x), M3 (DELETE/UPDATE), M4 (key UPDATE vs non-key UPDATE) — the later writer's statement succeeds with its normal row count, its COMMIT fails `40001` OC000, the session is `I`, final data = the other transaction's
+- [ ] T020 [P] [US2] In `tests/occ/matrix.rs`: cells M1 (UPDATE/UPDATE, both orders of A-commit vs B-write: S1, S1x), M3 (DELETE/UPDATE), M4 (key UPDATE vs non-key UPDATE) — the later writer's statement succeeds with its normal row count, its COMMIT fails `40001` OC000, the session is `I`, final data = the other transaction's; a schema conflict (S7: concurrent `ALTER TABLE`) is still reported at COMMIT as OC001 and never deferred (FR-015)
 - [ ] T021 [P] [US2] In `tests/occ/matrix.rs`: M2 same-PK and same-UNIQUE INSERT — second COMMIT fails OC000 (unchanged path, FR-014); M8 write skew both commit
 - [ ] T022 [P] [US2] In `tests/occ/matrix.rs`: doomed transaction edge cases — ROLLBACK after deferral is silent; a later `23505` in a doomed transaction gives `25P02` until ROLLBACK and COMMIT answers ROLLBACK; doomed + age limit → COMMIT reports `54000` age error (use `ServerOptions.limits.max_txn_age` small); re-run conflicting again (other writer still open, S1x before A commits) → tag with 0 rows, `RETURNING` gives 0 rows, COMMIT OC000; nothing of a doomed transaction is ever committed (FR-013)
 - [ ] T023 [P] [US2] In `tests/occ/matrix.rs`: with `OccOptions { defer_conflicts: false, .. }` the conflict is reported at the UPDATE as today (FR-016)
