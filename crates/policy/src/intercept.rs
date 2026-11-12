@@ -15,6 +15,10 @@ pub enum Intercept {
     },
     /// A `SET`/`RESET` accepted as a no-op; the command tag is `SET` or `RESET`.
     SetNoop { tag: &'static str },
+    /// `DEALLOCATE [PREPARE] <name>` (`Some`) or `DEALLOCATE ALL` (`None`), answered with its
+    /// command tag. The engine has no SQL-level `PREPARE`; protocol-level statements stay in
+    /// the wire server's store (drivers such as psycopg send `DEALLOCATE ALL` after DDL).
+    Deallocate { name: Option<String> },
     /// A statement rejected with an error.
     Error {
         sqlstate: &'static str,
@@ -33,6 +37,9 @@ pub fn intercept(sql: &str) -> Option<Intercept> {
         NodeEnum::VariableShowStmt(show) => {
             show_parameter(&show.name).map(|(column, value)| Intercept::Show { column, value })
         }
+        NodeEnum::DeallocateStmt(stmt) => Some(Intercept::Deallocate {
+            name: (!stmt.isall).then(|| stmt.name.clone()),
+        }),
         NodeEnum::VariableSetStmt(set) if set.name.eq_ignore_ascii_case("timezone") => {
             let kind = VariableSetKind::try_from(set.kind).unwrap_or(VariableSetKind::Undefined);
             match kind {
@@ -79,6 +86,26 @@ fn const_text(node: &NodeEnum) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn deallocate_is_intercepted() {
+        assert_eq!(
+            intercept("DEALLOCATE p1"),
+            Some(Intercept::Deallocate {
+                name: Some("p1".into())
+            })
+        );
+        assert_eq!(
+            intercept("deallocate prepare \"Mixed\""),
+            Some(Intercept::Deallocate {
+                name: Some("Mixed".into())
+            })
+        );
+        assert_eq!(
+            intercept("DEALLOCATE ALL"),
+            Some(Intercept::Deallocate { name: None })
+        );
+    }
 
     #[test]
     fn show_known_parameters() {

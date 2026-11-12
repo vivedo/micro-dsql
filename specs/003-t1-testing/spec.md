@@ -246,3 +246,111 @@ Decisions taken without a human in the loop (decision; alternatives; reason):
 - **Validation clients**: the harness was validated against MiniStack with psql 16 (Debian `dash`
   and Alpine `busybox sh`) and with psql 18; all three produce identical output.
 - **Ports**: the reference uses 4566 and 25432–25440 only; port 5432 is never used by this feature.
+
+Reconcile (after M1) decisions:
+
+- **Differential run topology**: both targets were driven by the same psql 16 client running in
+  MiniStack's network namespace, with micro-dsql listening on all interfaces of the host and
+  reached through the container runtime's host alias; alternatives: run each side with its own
+  psql and merge the outputs, or compare against the stored MiniStack expected outputs only;
+  reason: one client version for both columns keeps psql formatting out of the diff, and the
+  committed scripts stay unchanged (the workaround lives only in the local shell).
+- **`DEALLOCATE` is answered with its command tag without touching the statement store**;
+  alternatives: remove the named statement and report `26000` for unknown names (needs the
+  statement store in the simple-query path, which pgwire's handler bounds do not expose);
+  reason: psycopg only needs `DEALLOCATE ALL` to succeed; the difference is in `KNOWN_GAPS.md`.
+- **CI layer-1 and differential wiring is kept as M1 delivered it** (it already runs layer 1
+  against micro-dsql on macOS and Linux as a blocking step, and uses micro-dsql as target A in the
+  allowed-to-fail differential job); alternatives: a separate layer-1 job; reason: no gap found.
+- **README quick start kept as M1 wrote it** (three lines: start, connect with psql, done).
+- **Probe mismatches are recorded, not fixed** (PLAN.md T1: "fidelity gaps found here are
+  recorded, not fixed"); the `DEALLOCATE` fix is the exception because it broke a mainstream
+  driver outright.
+
+## Reconcile results (after M1)
+
+Run on 2026-11-12 against micro-dsql built from this branch (debug build, `--memory`).
+
+### Layer 1
+
+| Scenario | micro-dsql (psql 18 client) | micro-dsql (psql 16 client) | MiniStack (psql 16 client) | A/B output |
+|---|---|---|---|---|
+| 00_connect | PASS | PASS | PASS | identical |
+| 10_crud | PASS | PASS | PASS | identical |
+| 20_txn | PASS | PASS | PASS | identical |
+| 30_errors | PASS | PASS | PASS | identical |
+| 40_conflict | PASS | PASS | PASS | identical |
+
+No layer-1 diff between micro-dsql and MiniStack; `tests/psql/known-gaps.txt` stays empty. The same
+five scenarios also pass through the tokio-postgres harness (`tests/smoke/t1_layer1.rs`) over both
+the simple and the extended protocol, with the same values asserted for both. Start-up to first
+accepted TCP connection: about 20 ms (the first launch of a freshly linked binary on macOS took
+about 2 s, an OS first-run check, not micro-dsql).
+
+### Differential report
+
+`reports/diff-2026-11-12.md` (gitignored; regenerate with `scripts/compare.sh`): scenarios 5 of 5
+identical; probes 0 of 22 match on micro-dsql, 22 of 22 match on MiniStack.
+
+## Follow-ups / M2–M3 backlog
+
+One item per probe mismatch (`tests/psql/probes/`). "MiniStack" is the reference column; where
+MiniStack itself differs from real DSQL (tests/psql/README.md) the target is real DSQL.
+
+| # | Probe | MiniStack behaviour | micro-dsql behaviour | Target |
+|---|---|---|---|---|
+| 1 | 01_truncate | `TRUNCATE` refused, `0A000 TRUNCATE is not supported`; rows kept | accepted, rows removed | M2 |
+| 2 | 02_savepoint | `SAVEPOINT` refused (`0A000`), transaction aborted (`25P02`), `ROLLBACK TO` gives `3B001` | savepoints work | M2 |
+| 3 | 03_temp_table | TEMP/TEMPORARY/UNLOGGED tables refused with `0A000 temporary/unlogged tables is not supported`; TEMP VIEW accepted (MiniStack only; DSQL refuses); `DROP TABLE IF EXISTS a, b, c` accepted | TEMP refused with a different message; UNLOGGED accepted; TEMP VIEW refused; `DROP TABLE` of several objects refused (`0A000`) | M2 (deny rule + message); multi-object DROP M3 |
+| 4 | 04_create_index_async | plain `CREATE INDEX` refused (`0A000 unsupported mode. please use CREATE INDEX ASYNC.`); `CREATE [UNIQUE] INDEX ASYNC` returns a 26-char job id, `sys.wait_for_job` returns `t`; PK index named `<table>_pkey` | plain `CREATE INDEX` accepted; `ASYNC` is a syntax error (`42601`); PK index named `__turso_internal_pk_index_<table>` | M3 (ASYNC, jobs, index naming); M2 (refuse synchronous CREATE INDEX) |
+| 5 | 05_sys_jobs | `sys.jobs` with 9 columns, completed `INDEX_BUILD` job, malformed job id gives `f`; `sys.dsql_major_version()` missing (MiniStack only; DSQL returns 1) | schema `sys` missing (`42P01`/`3F000`) | M3 |
+| 6 | 06_ddl_dml_one_txn | DDL+DML in one transaction refused, `25006 DDL and DML statements cannot be mixed in a transaction`, both orders; `to_regclass` works | both orders accepted; `to_regclass` missing (`42883`) | M2 (rule); `to_regclass` M3 |
+| 7 | 07_two_ddl_one_txn | second DDL refused, `25006 only one DDL statement can be run in a transaction` | accepted | M2 |
+| 8 | 08_create_extension | `CREATE EXTENSION` refused with `0A000`; `DROP EXTENSION IF EXISTS` is a silent no-op | refused with `42601`; `DROP EXTENSION IF EXISTS` refused | M2 (error shaping) |
+| 9 | 09_serial_column | `serial`/`bigserial`/`smallserial` refused, `0A000 type "serial" is not supported` | accepted | M2 |
+| 10 | 10_set_not_whitelisted | non-whitelisted `SET`/`set_config` refused, `0A000 setting configuration parameter "<name>" not supported`; `lock_timeout`, `idle_in_transaction_session_timeout`, `enable_seqscan` (SET/SHOW/RESET) accepted | `42601 SET <name> is not supported`, `22023` for the timeouts, `42704` from `set_config`; `enable_seqscan` refused | M2 (SET whitelist) |
+| 11 | 11_isolation_levels | default `read committed`, every level accepted (MiniStack only; DSQL is REPEATABLE READ only) | default `repeatable read`, other levels refused `0A000` (matches real DSQL); `SET default_transaction_isolation` refused `42601`; `SET SESSION CHARACTERISTICS … REPEATABLE READ` refused `42601` (driver re-test) | M2 (accept the RR forms of SET); levels: no change |
+| 12 | 12_session_identity | `is_superuser` `on`, `server_version` 16.15, `datcollate` `en_US.utf8`, `CREATE DATABASE` refused `0A000 CREATE DATABASE is not supported` | `is_superuser` `off` (matches DSQL), 16.13, `en_US.UTF-8` (DSQL: `C`), `CREATE DATABASE` refused `42601 CREATEDB is not supported` | M2 (error shaping, `datcollate` `C`) |
+| 13 | 20_denylist | every denied statement gives `0A000 <X> is not supported`; `CREATE FUNCTION … LANGUAGE sql` accepted and callable, plpgsql/C/procedures/triggers refused; `COPY … TO STDOUT` refused; `CREATE TYPE` (enum and composite) and `CREATE DOMAIN` refused; `pg_advisory_lock` callable; `DECLARE` outside a transaction `25P01`; `PREPARE TRANSACTION` `0A000`; `DROP … IF EXISTS` of unsupported objects silent | mostly `42601` with engine wording; every `CREATE FUNCTION` refused; `COPY TO STDOUT`, `CREATE TYPE … ENUM` and `CREATE DOMAIN` accepted; `pg_advisory_lock` missing (`42883`); `LOCK TABLE` gives a different message; `DROP FUNCTION/PROCEDURE/TYPE IF EXISTS` fail `42601 DROP: unexpected object format` | M2 (deny rules, `0A000` shaping, IF EXISTS no-ops); SQL functions M3/upstream |
+| 14 | 21_column_types | `money`, `xml`, `inet`, `int[]`, `point`, `bit(8)` refused, `0A000 type "<t>" is not supported`; `pg_attribute` + `format_type` list a table's columns (bare `numeric` stays `numeric` on MiniStack; DSQL reports `numeric(18,6)`) | those types accepted (`bit(8)` refused with another message); `pg_attribute` returns no rows for the table | M2 (type deny rules, numeric rewrite); M3 (`pg_attribute`/`format_type` catalog) |
+| 15 | 22_identity_sequences | `bigint GENERATED … AS IDENTITY (CACHE 65536 / CACHE 1)` works; non-bigint identity refused `0A000 identity columns are only supported on bigint columns`; `CACHE 100` refused `CACHE must be 1 or at least 65536` | every identity column refused with a misleading `0A000 WITH (storage parameters) / USING INDEX TABLESPACE …`; sequence `CACHE 65536` refused | M3 |
+| 16 | 23_dsql_settings | `dsql.enable_batched_nestloop` shows `on`, settable, non-boolean refused `22023`; unknown `dsql.*` refused `42602 … "dsql" is a reserved prefix`; `SET enable_hashjoin`, `RESET default_statistics_target` accepted | `dsql.*` unknown (`42704`) and `set_config('dsql.bogus', …)` accepted; `enable_hashjoin`/`RESET` refused `42601` | M2 |
+| 17 | 24_txn_discipline | two `DROP TABLE` in one transaction refused (`25006`); scalar-subquery `count(*)` typed `int8` | accepted; scalar-subquery counts described as `text` (B3) | M2 (rule); typing M2/upstream |
+| 18 | 25_txn_row_limit | 3,001 rows in one `VALUES` list and a 4,000-row cumulative transaction refused `25006 transaction exceeds the 3,000 row limit` (MiniStack counts only `VALUES` rows; DSQL counts every mutated row and uses `54000`) | no limit | M2 (count changed rows, DSQL's `54000`) |
+| 19 | 26_locking_reads | `FOR UPDATE` and `FOR KEY SHARE` accepted (also inside transactions); `FOR SHARE`/`FOR NO KEY UPDATE` refused `0A000 locking clauses other than FOR UPDATE/FOR KEY SHARE are not supported` | every locking clause refused `0A000`; inside a transaction the refusal aborts it | M3 (accept as plain reads); M4 (`FOR UPDATE` as a write-set touch) |
+| 20 | 27_alter_table | `ADD COLUMN` with a default/NOT NULL refused `0A000 … with constraint not supported`; `ALTER COLUMN TYPE`, `SET NOT NULL` refused `0A000`; `SET/DROP DEFAULT` accepted; `ADD CONSTRAINT … NOT VALID` + `ALTER TABLE ASYNC … VALIDATE CONSTRAINT` (job) accepted; FK added and enforced (`23503`); `DROP CONSTRAINT` accepted; dropping the PK column `0A000` | `ADD COLUMN … DEFAULT 0` accepted, NOT NULL gives `42000`; most refusals `42601`; `SET/DROP DEFAULT`, `ADD/DROP CONSTRAINT` refused; `ALTER TABLE ASYNC` syntax error; `pg_attribute` empty | M2 (error codes, refuse ADD COLUMN with constraint); M3 (NOT VALID, VALIDATE ASYNC, SET/DROP DEFAULT, ADD/DROP CONSTRAINT) |
+| 21 | 28_index_forms | `CONCURRENTLY` refused `0A000`; `USING hash` refused; more than 8 key columns `54011`; ASYNC 8-column, expression, partial and `INCLUDE` indexes built; volatile predicate `42P17` | `CREATE INDEX CONCURRENTLY` accepted; every `ASYNC` form a syntax error | M2 (CONCURRENTLY/USING/8-column rules); M3 (ASYNC forms) |
+| 22 | 29_txn_abort | a refused statement (`TRUNCATE`) aborts the transaction: next statement `25P02`, `ROLLBACK` keeps the table unchanged | `TRUNCATE` accepted, transaction continues | M2 (follows from the TRUNCATE rule; refusals must abort the block) |
+
+### Driver re-test (M0 spike scripts against micro-dsql)
+
+The M0 smoke scripts (`spike/`) were run unchanged against fresh micro-dsql instances (one per
+group). Every step that is not an intentional error passes; the only `ERR` lines are the
+deliberate duplicate-key steps (`23505`).
+
+| Driver | M0 (upstream `tursopg`) failures | micro-dsql failures | Remaining notes |
+|---|---|---|---|
+| psql | 0 | 0 | |
+| psycopg 3 (binary + text) | 13 + 4 | 1 + 1 (the dup-key step) | `timestamptz` microseconds truncated to milliseconds (B7); `DEALLOCATE ALL` fixed in this phase |
+| asyncpg | 7 | 1 (dup-key step) | |
+| node-pg | 1 | 1 (dup-key step) | |
+| pgx (extended + simple) | 13 | 2 (dup-key steps) | |
+| wire probe | 1 error | 0 | Terminate closes the connection |
+| OCC scripts | — | all errors are the expected `40001`/`25P02`/refused isolation levels | `SET SESSION CHARACTERISTICS … REPEATABLE READ` refused (backlog #11) |
+| app schema/queries/probes | 39 errors | 40 errors | engine gaps already in `KNOWN_GAPS.md` (B6–B8, B12, B14) |
+
+JDBC was not re-tested (no smoke script in `spike/`).
+
+## T1 exit checklist (PLAN.md §4 T1)
+
+- [x] Layer 1 is green against micro-dsql locally (5/5, psql 16 and 18 clients, two consecutive
+  runs). **In CI: not verified** — `.github/workflows/ci.yml` runs it as a blocking step on
+  `ubuntu-latest` and `macos-latest`, but the workflow was not run in this phase.
+- [x] Layer 1 is also green against MiniStack (5/5, output identical to micro-dsql's).
+- [x] A first differential report exists (`reports/diff-2026-11-12.md`, local only) and every
+  probe mismatch is listed above as an M2/M3/M4 backlog item (22 items). The differential CI job
+  (`.github/workflows/differential.yml`, micro-dsql as target A, allowed to fail) was not run.
+- [x] The README has a 3-line quick start: start the binary, connect with `psql`, done.
+- [x] Any password works: arbitrary passwords and a token-shaped password (the format
+  `aws dsql generate-db-connect-admin-auth-token` prints) were accepted. **Not verified with a real
+  AWS-generated token** (no AWS CLI on the test machine); micro-dsql never inspects the password.

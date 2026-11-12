@@ -506,6 +506,11 @@ fn run_intercept(
             })
         }
         Intercept::SetNoop { tag } => Ok(Outcome::Command(Tag::new(tag))),
+        Intercept::Deallocate { name } => Ok(Outcome::Command(Tag::new(if name.is_some() {
+            "DEALLOCATE"
+        } else {
+            "DEALLOCATE ALL"
+        }))),
         Intercept::Error { sqlstate, message } => {
             conn.abort_transaction_block_on_error();
             Err(PgWireError::ApiError(Box::new(SqlError {

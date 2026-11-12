@@ -67,17 +67,18 @@ from micro-dsql.
 - [x] T022 Tear down all containers (scripts/ministack-down.sh; remove the postgres:16 fallback container)
 - [x] T023 Check committed files for machine-specific paths/hostnames and attribution; commit on 003-t1-testing
 
-## Phase 7: Reconcile (after M1) — DEFERRED, needs the micro-dsql binary
+## Phase 7: Reconcile (after M1)
 
-**Goal**: User Story 4 / FR-012..FR-014 / SC-006. Not executed in this wave.
+**Goal**: User Story 4 / FR-012..FR-014 / SC-006. Executed after M1; results in spec.md
+"Reconcile results", "Follow-ups / M2–M3 backlog" and "T1 exit checklist".
 
-- [ ] T024 [US4] Start `micro-dsql --listen 127.0.0.1:<port>` and run tests/psql/run.sh against it; for each failing scenario either fix micro-dsql (M1 follow-up) or record it in tests/psql/known-gaps.txt and KNOWN_GAPS.md (constitution Principle V); never edit expected outputs to match micro-dsql
-- [ ] T025 [US4] Run the five scenarios through the M1 tokio-postgres harness (extended protocol), e.g. a Rust integration test that replays tests/psql/*.sql statements, in tests/smoke/ (owned by the Rust workspace)
-- [ ] T026 [US4] Add layer-1 CI against micro-dsql (macOS + Linux) using the binary built by M1's workflow; make it blocking
-- [ ] T027 [US4] Wire micro-dsql as target A in .github/workflows/differential.yml
-- [ ] T028 [US4] Produce the first differential report with scripts/compare.sh (micro-dsql vs MiniStack) and list each probe mismatch as an M2/M3 backlog item (e.g. in a backlog doc or issues)
-- [ ] T029 [US4] Add the 3-line quick start (start the binary, connect with psql, done) to README.md
-- [ ] T030 [US4] Tick the T1 exit checklist in PLAN.md-derived docs once all of the above hold
+- [x] T024 [US4] Start `micro-dsql --listen 127.0.0.1:<port>` and run tests/psql/run.sh against it; for each failing scenario either fix micro-dsql (M1 follow-up) or record it in tests/psql/known-gaps.txt and KNOWN_GAPS.md (constitution Principle V); never edit expected outputs to match micro-dsql
+- [x] T025 [US4] Run the five scenarios through the M1 tokio-postgres harness (extended protocol), e.g. a Rust integration test that replays tests/psql/*.sql statements, in tests/smoke/ (owned by the Rust workspace)
+- [x] T026 [US4] Add layer-1 CI against micro-dsql (macOS + Linux) using the binary built by M1's workflow; make it blocking
+- [x] T027 [US4] Wire micro-dsql as target A in .github/workflows/differential.yml
+- [x] T028 [US4] Produce the first differential report with scripts/compare.sh (micro-dsql vs MiniStack) and list each probe mismatch as an M2/M3 backlog item (e.g. in a backlog doc or issues)
+- [x] T029 [US4] Add the 3-line quick start (start the binary, connect with psql, done) to README.md
+- [x] T030 [US4] Tick the T1 exit checklist in PLAN.md-derived docs once all of the above hold
 
 ## Dependencies & Execution Order
 
