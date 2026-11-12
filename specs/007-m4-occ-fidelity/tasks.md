@@ -16,6 +16,10 @@ becoming `LockBusy → OC001` (FR-004, a requirement change).
 **Organization**: by user story (spec.md). Order of value per effort: US1 → US2 → US3 → US4; US5
 (the suite as exit criterion) closes the feature.
 
+**Revision** (2026-11-12, after merging 006): existing ids kept; T001 done; T006, T008, T012,
+T013, T017, T018, T026, T043 reworded for the merged code; T070–T074 added (placed in their phase;
+ids are new, not renumbered).
+
 **Markers**: `[orchestrator]` / `[owner]` = cannot be done by the implementing agent (Docker
 differential, port 5432, live DSQL, manual walkthroughs).
 
@@ -28,8 +32,8 @@ differential, port 5432, live DSQL, manual walkthroughs).
 
 ## Phase 1: Setup
 
-- [ ] T001 Merge local `main` (with feature 006 merged) into `007-m4-occ-fidelity`, resolve conflicts in the shared files listed in plan.md §Seams (`crates/server/src/lib.rs`, `crates/policy/src/{session,statement,errors,lib}.rs`), and confirm `cargo test --workspace` and `tests/psql/run.sh` (server on `127.0.0.1:15507`) are green before any 007 change
-- [ ] T002 Re-run the research.md §1 wire matrix and engine probes on the merged tree (scratch, uncommitted) and note any change from research.md §1 in `specs/007-m4-occ-fidelity/research.md` §1 (append a dated "after merging 006" row block; do not edit `research/`)
+- [x] T001 Merge local `main` (with feature 006 merged, `3370541`) into `007-m4-occ-fidelity` (done: merge commit `817ec1d`, no conflicts). Before implementing, merge `main` again if it moved, and confirm `cargo test --workspace` and `tests/psql/run.sh` (server on `127.0.0.1:15507`) are green before any 007 change
+- [ ] T002 Re-run the research.md §1.1 two-session wire matrix on the merged tree (the engine probes were re-run already, research.md §1.3) and append any change to `specs/007-m4-occ-fidelity/research.md` §1.3 (do not edit `research/`)
 - [ ] T003 Register the OCC suite target: add `[[test]] name = "occ"`, `path = "../../tests/occ/main.rs"` to `crates/server/Cargo.toml`; create `tests/occ/main.rs` that includes the smoke harness with `#[path = "../../crates/server/tests/smoke/common.rs"] mod common;` and declares modules `matrix`, `autocommit`, `snapshot`, `locking`, `differences` (empty files); `cargo test -p micro-dsql-server --test occ` compiles and runs 0 tests
 
 ---
@@ -38,9 +42,9 @@ differential, port 5432, live DSQL, manual walkthroughs).
 
 - [ ] T004 Add a two-session step helper to `tests/occ/main.rs` (not to `common.rs`): `Session` wrapping a `tokio_postgres::Client` with `ok(sql)`, `err(sql) -> DbErr`, `value(sql)`, and constants `OC000`/`OC001` texts; plus `TestServer::start_with(ServerOptions { occ: … })` usage once T006 exists
 - [ ] T005 [P] Write failing unit tests in `crates/policy/src/occ.rs` (new module, declared in `crates/policy/src/lib.rs`) for `OccTxn` defaults and the data-model.md rules: "`doomed` implies `!implicit`", "`needs_fresh_snapshot(plan)` ⇔ `pinned && !touched && plan.class == Ddl`", "`doomed` survives every statement until the transaction ends"
-- [ ] T006 Add `OccOptions { defer_conflicts: true, snapshot_at_begin: true, busy_retry_attempts: 10, busy_retry_budget: 200 ms }` and `ServerOptions.occ` (Default) in `crates/server/src/lib.rs`; thread the options from `Server::serve` through `serve_connection` into `TursoPgHandler`
+- [ ] T006 Add `OccOptions { defer_conflicts: true, snapshot_at_begin: true }` and `ServerOptions.occ` (Default) in `crates/server/src/lib.rs`; thread the options from `Server::serve` through `serve_connection` into `TursoPgHandler`; define `occ::BUSY_RETRY = BusyRetry { attempts: 10, budget: 200 ms }` as a constant in `crates/server/src/occ.rs` (not an option: 006's `in_internal_transaction` has no access to the options)
 - [ ] T007 Implement `OccTxn` and wire it into `TxnState` (`occ` field) in `crates/policy/src/occ.rs` and `crates/policy/src/session.rs`: record `begin_sql` in `complete()` for a `Txn(Begin)` plan, set `touched` in `complete()`/`failed()` for every other plan; add `SessionPolicy::{begin_sql, is_implicit, is_doomed}`; T005 passes
-- [ ] T008 Create `crates/server/src/occ.rs` (declared in `crates/server/src/lib.rs`) with the `Engine` trait, `failure_of(&PgWireError) -> Option<EngineFailure>` (downcast to `turso_pg::Error`, then `dsql::engine_failure`), `PIN_SQL`, and `run(...)` that for now only delegates to `dsql::run_planned`; replace both `dsql::run_planned(...)` call sites in `crates/server/src/lib.rs` (simple `run_simple_statement` and extended `do_query`) by `occ::run(...)` with `Engine` impls wrapping today's closures (`empty()` prepares the statement and returns its header with no rows, tag with 0 rows); unit test `failure_of` in `crates/server/src/occ.rs`; all existing tests stay green
+- [ ] T008 Create `crates/server/src/occ.rs` (declared in `crates/server/src/lib.rs`) with the `Engine` trait, `failure_of(&PgWireError) -> Option<EngineFailure>` (downcast to `turso_pg::Error`, then `dsql::engine_failure`), `PIN_SQL`, and `run(...)` that for now only delegates to `dsql::run_planned`; replace both `dsql::run_planned(...)` call sites in `crates/server/src/lib.rs` (simple `run_simple_statement`, which also handles COPY, and extended `do_query`) by `occ::run(...)` with `Engine` impls wrapping today's closures (`empty()` prepares the statement and returns its header with no rows, or its command tag with 0 rows; never `Outcome::TaggedRows`, which only job statements produce); `occ::run` passes its wrapped closure to `dsql::run_planned`, leaving `dsql::dispatch` (006) unchanged; unit test `failure_of` in `crates/server/src/occ.rs`; all existing tests stay green (including 006's `dsql_ddl`, `dsql_jobs` and `constraints::tests`)
 
 **Checkpoint**: no behaviour change; suite target exists; seams in place.
 
@@ -57,17 +61,22 @@ multi-statement strings; residual contention retried, else OC001.
 
 - [ ] T010 [P] [US1] In `tests/occ/autocommit.rs`: storm of 8 sessions × 150 statements (distinct-row INSERT / hot-row UPDATE) asserting 0 INSERT failures, every error equal to `40001` OC000, and final counts consistent (rows = successful inserts + 1, counter = successful updates) — SC-001, research E-P2
 - [ ] T011 [P] [US1] In `tests/occ/autocommit.rs`: row limit — autocommit `INSERT … SELECT … generate_series(1,3001)`, `UPDATE` of 3,001 rows, `DELETE` of 3,001 rows each fail with `54000` `transaction row limit exceeded` and leave the table unchanged; exactly 3,000 rows succeeds (server with default limits; use `ServerOptions.limits` with a small `max_rows_per_txn` to keep the test fast where the size is not the point)
-- [ ] T012 [P] [US1] In `tests/occ/autocommit.rs`: multi-statement atomicity — simple query `INSERT (30); INSERT (30)` fails with `23505`, `count(*) WHERE id = 30` is 0, ReadyForQuery status `I`; a string with `BEGIN; …; COMMIT` keeps per-statement behaviour; a string of a single DDL runs as before
-- [ ] T013 [P] [US1] In `tests/occ/autocommit.rs`: autocommit UPDATE of a row another session wrote in an open transaction → OC000, session idle (E-P1); autocommit DML while another session holds an open DDL transaction → succeeds after the DDL commits within the retry budget, or `40001` OC001, never `55P03` (E-P4b, E-P9)
+- [ ] T012 [P] [US1] In `tests/occ/autocommit.rs`: multi-statement atomicity (FR-006) — simple query `INSERT (30); INSERT (30)` fails with `23505`, `count(*) WHERE id = 30` is 0, ReadyForQuery status `I`; `CREATE TABLE a (…); SELECT * FROM missing` fails with `42P01` and table `a` does not exist; a string with `BEGIN; …; COMMIT` keeps per-statement behaviour; a string of only reads/session statements is not wrapped (unchanged results)
+- [ ] T013 [P] [US1] In `tests/occ/autocommit.rs`: autocommit UPDATE of a row another session wrote in an open transaction → OC000, session idle (E-P1); autocommit DML **and autocommit DDL** (`CREATE TABLE`) while another session holds an open DDL transaction → succeeds after the DDL commits within the retry budget, or `40001` OC001, never `55P03` (E-P4b, E-P9)
+- [ ] T070 [P] [US1] In `tests/occ/autocommit.rs`: autocommit DML over the extended protocol (FR-008) — `client.execute` with a prepared `INSERT … VALUES ($1, 0)` / `UPDATE … WHERE id = $1`: a 4-session storm reports only OC000 and no insert failure; a duplicate key gives `23505` with the session idle (`client.is_closed()` false, next `SELECT 1` works); an `INSERT … SELECT` over the row limit gives `54000` with the table unchanged
+- [ ] T071 [P] [US1] In `tests/occ/autocommit.rs`: autocommit DDL with 006's server-side steps under contention — while session A holds `BEGIN; CREATE TABLE hold (id int PRIMARY KEY)` and commits it after ~50 ms, session B's autocommit `CREATE INDEX ASYNC ON t (v)` and `ALTER TABLE child ADD CONSTRAINT … FOREIGN KEY … NOT VALID` (rebuild) both succeed; `sys.jobs` has exactly one row per job statement; no `55P03` ever; when A holds the lock past the budget, B gets `40001` OC001 and the table/index/constraint state is unchanged
+- [ ] T074 [P] [US1] Unit test in `crates/server/src/occ.rs`: `internal_transaction` on two connections of one database — with the second connection holding an open DDL transaction released after 30 ms, the steps run more than once and finally commit; with it never released, the result is a `LockBusy` failure (shaped OC001 by the caller), the session is Idle and nothing the steps wrote exists
 - [ ] T014 [P] [US1] In `crates/policy/src/errors.rs`: change `engine_conflicts_become_dsql_errors` so `DataConflict` → OC000 and `LockBusy` → OC001 (FR-004); in `crates/policy/src/session.rs` tests: `check_implicit_rows(3000)` is `Ok`, `check_implicit_rows(3001)` is `54000`; `begin_implicit` makes `is_implicit()` true and a following `complete(…, Idle)` clears it
 
 ### Implementation
 
 - [ ] T015 [US1] `shape_engine_error`: map `EngineFailure::LockBusy` to `oc001()` and update the doc comment (no more interim mapping) in `crates/policy/src/errors.rs`; T014 errors part passes
 - [ ] T016 [US1] Add `SessionPolicy::{begin_implicit, check_implicit_rows}` in `crates/policy/src/session.rs` delegating to `crates/policy/src/occ.rs`; T014 passes
-- [ ] T017 [US1] In `crates/server/src/occ.rs`: implicit single-statement transaction for `plan.class == Dml` while `txn_status == Idle` (and `plan.locking` with a touch, later US4): `BEGIN` → `dsql::run_planned` → `check_implicit_rows(rows)` (over → `ROLLBACK`, `54000`) → `COMMIT`; any error → `ROLLBACK` then report; `LockBusy` at any step → `ROLLBACK`, sleep `2·n` ms, retry while `n < busy_retry_attempts` and total sleep ≤ `busy_retry_budget`; log `busy retry` / `residual contention` once at debug level; T010, T011, T013 pass
-- [ ] T018 [US1] In `crates/server/src/occ.rs` add `run_batch` and call it from `run_simple_query` and `do_query` in `crates/server/src/lib.rs` when the session is idle, the string has ≥ 2 statements, none is transaction control, and at least one is DML: `BEGIN`, `policy.begin_implicit(now)`, each statement through `occ::run` (implicit ⇒ no deferral, no retry), `COMMIT`; on error `ROLLBACK` + `failed(Idle)`; the wire status after the query is `I`; T012 passes
-- [ ] T019 [US1] Run the existing `crates/server/tests/smoke/dsql_conflicts.rs`, `dsql_rules.rs` (autocommit `values_rows` refusal) and `t1_layer1.rs` unchanged; fix the implementation, not the tests, if any fails
+- [ ] T017 [US1] In `crates/server/src/occ.rs`: implicit single-statement transaction for `plan.class == Dml` while `txn_status == Idle` (and `plan.locking` with a touch, later US4), placed **inside the engine closure** handed to `dsql::run_planned` (so the policy sees Idle before and after, research.md D1): `BEGIN` → statement → `check_implicit_rows(rows)` (over → `ROLLBACK`, `54000`) → `COMMIT`; any error → `ROLLBACK` then report; `LockBusy` at any step → `ROLLBACK`, sleep `2·n` ms, retry within `BUSY_RETRY`; log `busy retry` / `residual contention` once at debug level; same code path for the simple and the extended protocol; T010, T011, T013 (DML part), T070 pass
+- [ ] T072 [US1] In `crates/server/src/occ.rs`: for `plan.class == Ddl` while Idle, wrap the engine closure with a retry of the client's own engine statement on `LockBusy` within `BUSY_RETRY` (no `BEGIN`); 006's `dispatch` passes this closure to `sys::run_job_statement` and `ddl::run_ddl_statement`, whose own server-issued steps are not retried; T013 (DDL part) passes
+- [ ] T073 [US1] Add `occ::internal_transaction(conn, steps: impl FnMut() -> PgWireResult<T>)` (unpinned `BEGIN`, steps, `COMMIT`, `ROLLBACK` on any error, whole retry on `LockBusy` within `BUSY_RETRY`) in `crates/server/src/occ.rs`, and make 006's `constraints::in_internal_transaction` (`crates/server/src/constraints.rs`) take `steps: impl FnMut` and delegate its Idle branch to it (Active/Aborted branch unchanged; update its doc comment: the M4 helper is now in use); T071, T074 and 006's `constraints::tests` / `dsql_ddl` rebuild tests pass
+- [ ] T018 [US1] In `crates/server/src/occ.rs` add `run_batch` and call it from `run_simple_query` and `do_query` in `crates/server/src/lib.rs` when the session is idle, the string has ≥ 2 statements, none is transaction control, and at least one is DML or DDL (FR-006): `BEGIN`, `policy.begin_implicit(now)`, each statement through `occ::run` (implicit ⇒ no deferral, no retry; 006's `ddl.rs` sees Active and leaves undo to the `ROLLBACK`), `COMMIT`; on error `ROLLBACK` + `failed(Idle)`; the wire status after the query is `I`; T012 passes
+- [ ] T019 [US1] Run the existing `crates/server/tests/smoke/dsql_conflicts.rs`, `dsql_rules.rs` (autocommit `values_rows` refusal), `t1_layer1.rs` and 006's `dsql_ddl.rs`, `dsql_jobs.rs` unchanged; fix the implementation, not the tests, if any fails
 
 **Checkpoint**: US1 complete; `55P03` never reaches a client in the suite.
 
@@ -90,7 +99,7 @@ multi-statement strings; residual contention retried, else OC001.
 ### Implementation
 
 - [ ] T025 [US2] Add `SessionPolicy::mark_doomed` and the doomed-COMMIT branch in `admit` (after the age check) in `crates/policy/src/session.rs` / `crates/policy/src/occ.rs`; T024 passes
-- [ ] T026 [US2] In `crates/server/src/occ.rs` wrap the engine for explicit, non-implicit transactions when `defer_conflicts`: on `failure_of(err) == Some(DataConflict)` from a statement (not COMMIT): `ROLLBACK`, run `policy.begin_sql()` (fallback `BEGIN`), pin if `snapshot_at_begin` (after US3; until then skip), `mark_doomed()`, re-run the statement once; on a second `DataConflict` return `engine.empty(sql)`; any other error is returned (block aborted by the engine); log `deferred conflict` once at debug level; T020, T022, T023 pass
+- [ ] T026 [US2] In `crates/server/src/occ.rs` wrap the engine for explicit, non-implicit transactions when `defer_conflicts` (DML and FOR UPDATE plans only; job/DDL plans and 006's internal transaction are never deferred): on `failure_of(err) == Some(DataConflict)` from a statement (not COMMIT): `ROLLBACK`, run `policy.begin_sql()` (fallback `BEGIN`), pin if `snapshot_at_begin` (after US3; until then skip), `mark_doomed()`, re-run the statement once; on a second `DataConflict` return `engine.empty(sql)`; any other error is returned (block aborted by the engine); log `deferred conflict` once at debug level; T020, T022, T023 pass
 - [ ] T027 [US2] Run `tests/psql/run.sh` against `micro-dsql --listen 127.0.0.1:15507`: `40_conflict` must still print `40001 reported: yes`, `session A (first committer) got 40001: no`, `final value: from A` with `tests/psql/expected/40_conflict.out` unchanged
 
 **Checkpoint**: US1 + US2 = the MVP for DSQL retry-loop tests.
@@ -131,7 +140,7 @@ multi-statement strings; residual contention retried, else OC001.
 
 ### Implementation
 
-- [ ] T043 [US4] Implement `crates/policy/src/locking.rs` (`LockStrength`, `LockingRead`, `TouchPlan::{relation, render}`, `plan_locking`) using AST clones and `NodeEnum::deparse`; add `locking_read_form()` (rule id `locking_read_form`, `0A000`, message `locking clause is only supported on a single-table SELECT`) in `crates/policy/src/errors.rs` and record the rule in `specs/007-m4-occ-fidelity/contracts/occ-api.md` §1 (the 005 folder is not edited); T040 passes
+- [ ] T043 [US4] Implement `crates/policy/src/locking.rs` (`LockStrength`, `LockingRead`, `TouchPlan::{relation, render}`, `plan_locking`) using AST clones and `NodeEnum::deparse`; add `locking_read_form()` (rule id `locking_read_form`, `0A000`, message `locking clause is only supported on a single-table SELECT`) in `crates/policy/src/errors.rs` and record the rule in `specs/007-m4-occ-fidelity/contracts/occ-api.md` §1 (the 005 folder is not edited). FR-034: before coding, search `research/` and the referenced Dreamescaper rules for a recorded text for these forms; if one exists, use it instead of the generic text and note it in research.md D4; T040 passes
 - [ ] T044 [US4] Add `StatementPlan.locking` in `crates/policy/src/statement.rs`: set from `plan_locking`, `engine_sql = read_sql` when accepted, refusal merged into `plan.refusal`; existing `statement.rs` tests stay green
 - [ ] T045 [US4] In `crates/server/src/occ.rs`: when `plan.locking` has a touch, choose the column (first non-primary-key column of the relation from `conn.inner().current_schema()`, else the first column; fall back to the first column of `SELECT * FROM <relation> LIMIT 0` if the schema lookup fails), run `touch.render(column)` with the portal's parameters (extended protocol) before the read, discard its count (not passed to `complete`), apply US1/US2 handling to its errors; include FOR UPDATE in the autocommit implicit-transaction path (T017); T041, T042 pass
 - [ ] T046 [US4] Run `tests/psql/run.sh --probes 26_locking_reads` against `127.0.0.1:15507` and record in `specs/007-m4-occ-fidelity/research.md` §1 which lines still differ from the reference (expected: none except documented differences); do not re-capture the probe's expected file
@@ -168,6 +177,7 @@ multi-statement strings; residual contention retried, else OC001.
 ## Dependencies & Execution Order
 
 - Phase 1 (T001–T003) → Phase 2 (T004–T008) → stories.
+- Within US1: T010–T014, T070, T071, T074 (tests) → T015, T016 → T017 → T072 → T073 → T018 → T019.
 - US1 (Phase 3) first: US2's replay and US4's autocommit path build on `occ::run`'s implicit transaction.
 - US2 (Phase 4) depends on US1 (T017) only for shared code in `occ.rs`; its tests are independent.
 - US3 (Phase 5) is independent of US2 except T035's "pin the re-opened transaction", which needs T026.
@@ -177,9 +187,9 @@ multi-statement strings; residual contention retried, else OC001.
 
 ## Parallel Opportunities
 
-- T005 ∥ T006; T010–T014 together (different files or modules); T020–T024 together; T030–T033
+- T005 ∥ T006; T010–T014, T070, T071, T074 together (different files or modules); T020–T024 together; T030–T033
   together; T040–T042 together; T050–T052 together.
-- Implementation tasks in `crates/server/src/occ.rs` (T017, T018, T026, T035, T045) are sequential
+- Implementation tasks in `crates/server/src/occ.rs` (T017, T072, T073, T018, T026, T035, T045) are sequential
   (same file).
 
 ## Implementation Strategy
