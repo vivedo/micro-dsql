@@ -96,11 +96,10 @@ fn has_unsupported_locking(sql: &str) -> bool {
     let kinds: Vec<Token> = tokens(sql).into_iter().map(|(t, _)| t).collect();
     kinds.iter().enumerate().any(|(i, t)| {
         *t == Token::For
-            && match kinds[i + 1..] {
-                [Token::Share, ..] => true,
-                [Token::No, Token::Key, Token::Update, ..] => true,
-                _ => false,
-            }
+            && matches!(
+                kinds[i + 1..],
+                [Token::Share, ..] | [Token::No, Token::Key, Token::Update, ..]
+            )
     })
 }
 
