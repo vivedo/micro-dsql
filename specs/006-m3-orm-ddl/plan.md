@@ -18,10 +18,13 @@ DSQL's answers and refusals, entirely in our own crates (no Turso patch planned)
 3. **Identity and CACHE**: rules (DSQL's mandatory CACHE, bigint-only identity) plus rewrites
    (CACHE → 1; identity → prelude `CREATE SEQUENCE` + `DEFAULT nextval(…)`), sequence cleanup on
    DROP TABLE.
-4. **`ADD CONSTRAINT … NOT VALID` / `VALIDATE`**: the engine has no ADD CONSTRAINT; the server adds
-   single-column FK/CHECK constraints through the core engine's `ALTER COLUMN` path
-   (`PgConnection::inner().prepare_translated_stmt`), gated by a spike; VALIDATE runs a check query
-   and records a completed/failed job.
+4. **`ADD CONSTRAINT … NOT VALID` / `VALIDATE`**: the engine has no ADD CONSTRAINT. Spike T032
+   showed the core `ALTER COLUMN` path cannot add an enforced FK and validates existing rows for a
+   CHECK (research.md §6). **Owner decision T033 (2026-11-12): the server rebuilds the table**
+   (SQLite-style: new table with the added constraint, rows copied with FK enforcement and CHECK
+   evaluation switched off on the session's connection, old table dropped, new one renamed,
+   indexes recreated), after a time-boxed spike (T071). VALIDATE runs a check query and records a
+   completed/failed job (done).
 5. **Deferred DSQL DDL rules** from 005 D9 (sync CREATE INDEX, CONCURRENTLY, USING, >8 keys, ADD
    COLUMN with constraint, ALTER COLUMN TYPE, SET NOT NULL, DROP PK column, ADD CONSTRAINT forms,
    sync VALIDATE, `sys` writes).
@@ -31,6 +34,24 @@ DSQL's answers and refusals, entirely in our own crates (no Turso patch planned)
 
 Evidence for every decision is in [research.md](research.md); the description's facts that differ
 from the code are in research.md §4.
+
+## Update 2026-11-12 (after the first implementation round)
+
+Scope of this update: the T033 owner decision and the ASYNC-keyword decision only.
+
+- **T033**: rebuild design D13 (research.md §8.2), pre-spike facts §8.1 (copy with FKs on fails
+  `23503`; renaming the old table drags referencing FKs; `DROP` of a referenced table fails `23503`;
+  derived constraint names follow the new table name; the core switches
+  `set_foreign_keys_enabled` / `set_check_constraints_ignored` exist). New tasks T071–T080; T033
+  is closed by the decision; T035/T037 are reworked onto the rebuild. Fallback (FK accepted without
+  enforcement, known gap) only if the spike fails, reported by the implementer.
+- **ASYNC keyword**: `CREATE INDEX ASYNC ON t (c)` unquoted is the keyword (unnamed async index);
+  only `"async"` is a name. Already implemented; docs aligned (spec edge case, research D1,
+  data-model).
+- **Turso patch**: still **none**. The rebuild uses only public core APIs already reachable from the
+  server (`PgConnection::inner()`, `Connection::set_foreign_keys_enabled`,
+  `Connection::set_check_constraints_ignored`, `BTreeTable::to_sql()`), so Principle II's patch
+  path and the patch-crate seam with 007 stay unused.
 
 ## Technical Context
 
@@ -72,15 +93,17 @@ files, 2 scripts, 1 Node project
 | Principle / gate | Status |
 |---|---|
 | I. PoC scope | PASS. DDL fidelity is M3 scope (docs/plan.md §4). No TLS/auth/control plane. `information_schema` and ORM introspection (`drizzle-kit push`) stay non-goals: the Drizzle check uses generated SQL, not introspection. |
-| II. Own repo, pinned upstream; patches last | PASS (planned). `sys.*`: done in our crates (research D2), so the "probably needs the first Turso patch" expectation of docs/plan.md does not materialise. ADD CONSTRAINT: attempted in the server layer through a public core API (D7), gated by spike T032. A patch is used only if the spike fails; then the feature stops for an owner decision (blocking question, below) because the first patch must also solve the `patch-crate` git-workspace constraint. New dependency `turso_parser` uses the same pinned rev (one rev for every Turso crate). |
+| II. Own repo, pinned upstream; patches last | PASS. Update 2026-11-12: T032 failed; the owner chose a server-layer table rebuild (no patch), so no patch-crate wiring is needed. Original text: PASS (planned). `sys.*`: done in our crates (research D2), so the "probably needs the first Turso patch" expectation of docs/plan.md does not materialise. ADD CONSTRAINT: attempted in the server layer through a public core API (D7), gated by spike T032. A patch is used only if the spike fails; then the feature stops for an owner decision (blocking question, below) because the first patch must also solve the `patch-crate` git-workspace constraint. New dependency `turso_parser` uses the same pinned rev (one rev for every Turso crate). |
 | III. Backend-agnostic policy | PASS. New policy modules (`identity`, `ddl_rules`, `jobs`) work on the AST and plain values; job ids are encoded from a `u128` the server supplies; the engine-facing work (`sys.rs`, `ddl.rs`, `constraints.rs`) is in the server. All rules and rewrites unit-tested without an engine. |
 | IV. Test-first; gates `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings`, `cargo test --workspace`, `tests/psql/run.sh` vs micro-dsql | PLANNED. Each rule/rewrite gets a failing unit test and integration test first (tasks.md). Layer-1 expected outputs unchanged (they use no index, identity or ALTER). The two exit scripts are additional checks, not gates, and are not run by `cargo test`. |
 | V. Known-gap policy | PLANNED. docs/known-gaps.md: B12 narrowed; new entries (GENERATED ALWAYS, synchronous jobs, no invalid index, `oid` described as `integer`, `sys` visible as a schema/table, CACHE stored as 1, NOT VALID forms refused, `convalidated` if not expressible, `main.` in 42P01 texts, out-of-scope ALTER forms). |
 | Repository constraints | PASS. `research/` untouched; golden probes fetched at a pinned commit recorded in `scripts/conformance/UPSTREAM`, never committed; `reports/`, `target/`, `node_modules/` gitignored; no tool attribution; no absolute paths. |
 | Scope questions | One reinterpretation (not a scope change): "Drizzle's migrations run cleanly" cannot mean the stock migrator, which fails on live DSQL (research §2); spec Clarifications record the reading. |
 
-**Post-design re-check**: PASS, with one conditional item: if spike T032 fails, Principle II's
-patch path applies and needs the owner (see Blocking questions).
+**Post-design re-check**: PASS. T032 failed and the owner chose the server-layer rebuild (T033), so
+Principle II's patch path is not used. Principle IV: the rebuild's tests (T073) are written before
+its implementation; the two red tests stay in the suite until green or until the reported fallback
+marks them per Principle V.
 
 ## Design
 
@@ -118,7 +141,10 @@ Server-issued statements (job insert, catalog lookups, prelude, cleanup) go stra
 - D4 CACHE rules then CACHE → 1.
 - D5 identity → sequence + `DEFAULT nextval`; DROP TABLE drops `<t>_<c>_seq` defaults.
 - D6 job ids: 128 random bits, base-32; `Reply::Rows`.
-- D7 NOT VALID FK/CHECK via core `ALTER COLUMN` (spike-gated; fallback = patch + owner).
+- D7 NOT VALID FK/CHECK via core `ALTER COLUMN` — **failed** (T032, research.md §6).
+- D13 NOT VALID FK (and CHECK if it works) via a server-layer table rebuild (owner decision T033,
+  research.md §8.2), spike T071 first; fallback = FK accepted without enforcement (known gap),
+  reported.
 - D8 VALIDATE by check query; failed validation = failed job, statement succeeds.
 - D9 tooling: `tests/orm/drizzle` + `scripts/drizzle-check.sh`; `scripts/conformance.sh` + our Go
   comparer copied into the fetched upstream tree; reports to `reports/`.
@@ -143,7 +169,7 @@ repository has none since `ff325a3`).
   `PostgresDialect` modules. DSQL's real interface does not need engine functions: `sys.jobs` is a
   table the engine can hold (`CREATE SCHEMA sys` works), `wait_for_job` is a procedure called with
   `CALL` (answered by micro-dsql), and `dsql_major_version()` is used in two fixed forms.
-- `ADD CONSTRAINT … NOT VALID`: **no patch if spike T032 succeeds**. The core engine already has the
+- `ADD CONSTRAINT … NOT VALID`: **no patch** (update: T032 failed; the owner chose the server-layer table rebuild D13, which needs only public core APIs; the patch alternative below is not pursued). Original reasoning: The core engine already has the
   operation (`AlterTableBody::AlterColumn` with a full column definition, including `REFERENCES`
   and `CHECK`), reachable from our server through the public
   `turso_core::Connection::prepare_translated_stmt`. Only the PG translator lacks the mapping.
@@ -183,12 +209,22 @@ Patch-crate seam: **006 does not wire `patch-crate`**. If D7's fallback were nee
 stop and ask; if 007 needs a patch for autocommit/snapshot first, 007 owns the first wiring and 006
 reuses it. Only one feature wires it.
 
+### Table rebuild (D13) — atomicity and the 007 boundary
+
+Inside a client transaction the rebuild's statements run in it. When the session is Idle, the
+server wraps them in an internal `BEGIN` … `COMMIT` on the session's connection (`ROLLBACK` on any
+error). Why this is safe and not 007's "autocommit execution": no client statement runs inside it;
+it begins and ends within one client statement's execution; the policy sees Idle before and after
+and counts one DDL; client autocommit statements execute exactly as before. Seam: if 007 introduces
+a dedicated transaction-start helper (e.g. a concurrent BEGIN for autocommit), the rebuild calls it;
+the orchestrator coordinates (T068). The FK/CHECK switches are per connection and restored by a
+guard on every exit path, so no later client statement runs with them off.
+
 ### Blocking questions
 
-None at plan time. Conditional: if spike T032 shows the core `ALTER COLUMN` path cannot add an
-enforced single-column FK/CHECK on a PG-dialect connection, the owner must decide between (a) the
-first Turso patch (with the patch-crate constraint resolved or the constitution amended), or (b)
-refusing `ADD CONSTRAINT … NOT VALID` (Drizzle FKs then fail; exit criterion not met).
+None. The earlier conditional question was answered by the owner (T033: rebuild, no patch). If the
+rebuild spike (T071) fails, the fallback is already decided (FK accepted without enforcement, known
+gap) and must be reported, not silently applied.
 
 ## Project Structure
 
@@ -226,7 +262,8 @@ crates/policy/src/
 crates/server/src/
 ├── sys.rs            # new: bootstrap, run_job_statement, wait_for_job, purge
 ├── ddl.rs            # new: prelude/cleanup, DROP TABLE sequence cleanup, dispatch to constraints
-├── constraints.rs    # new: add_not_valid (core ALTER COLUMN), validate, check_drop_column
+├── constraints.rs    # new: add_check_not_valid (core ALTER COLUMN, until D13), validate, check_drop_column;
+│                     #   D13: rebuild_with_constraint (table rebuild, switches guard)
 ├── dsql.rs           # dispatch branch, Reply::Rows
 └── lib.rs            # pre-parse in the simple path, Describe, bootstrap call
 

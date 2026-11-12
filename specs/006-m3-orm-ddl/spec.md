@@ -83,13 +83,29 @@ consistency with the constitution and docs/plan.md.
   (an explicit value is stored instead of being refused with `428C9`); recorded as a known gap.
 - Q: What happens to a `NOT VALID` constraint form the engine cannot enforce (for example a
   multi-column or `DEFERRABLE` foreign key)? → A: It is refused with `0A000` and a micro-dsql
-  text naming the form, and listed in docs/known-gaps.md; a constraint is never accepted without
-  enforcement. Single-column foreign keys and CHECK constraints must be enforced (the Drizzle exit
-  depends on them).
+  text naming the form, and listed in docs/known-gaps.md. Single-column foreign keys and CHECK
+  constraints must be enforced (the Drizzle exit depends on them); the only exception is the
+  owner-approved fallback of the table-rebuild decision below, which must be reported, never chosen
+  silently.
 - Q: Are the DSQL adaptations of the Drizzle example's generated migrations made by hand or by a
   script? → A: By hand, once, in the committed migration files; the example's README lists each
   edit (ASYNC, `NOT VALID` + `VALIDATE`, no `USING btree` needed) so they can be repeated for a new
   migration.
+- Q: The core `ALTER COLUMN` path cannot add an enforced foreign key and validates existing rows
+  for a CHECK (spike T032, research.md §6); how are `FOREIGN KEY … NOT VALID` and `CHECK … NOT
+  VALID` implemented? → A: Owner decision (T033, 2026-11-12): micro-dsql rebuilds the table in its
+  server layer, the way SQLite implements ALTER TABLE: a new table carrying the added constraint,
+  rows copied without checking them (NOT VALID semantics), indexes, defaults/sequences and the
+  other constraints recreated, names swapped. No Turso patch. A time-boxed spike first covers
+  referencing tables, indexes (incl. ASYNC-built ones and their `sys.jobs` rows), identity
+  defaults, copying without checks, atomicity and concurrent writers. If the spike shows the
+  rebuild is unsafe, the fallback is: accept `FOREIGN KEY … NOT VALID` without enforcement, record
+  its job, and mark the `23503` assertion as a known gap — and the implementer reports that outcome
+  instead of choosing it silently. `CHECK … NOT VALID` uses the rebuild too if the spike shows it
+  works.
+- Q: Is the unquoted word in `CREATE INDEX ASYNC ON t (c)` the ASYNC keyword or an index named
+  `async`? → A: The keyword (owner decision, matching live DSQL's `create_index_async_unnamed`): an
+  unnamed asynchronous index. Only the quoted `"async"` is an index name.
 
 ## User Scenarios & Testing *(mandatory)*
 
@@ -297,9 +313,10 @@ ADD COLUMN with constraint not supported` and the column does not exist.
 
 ### Edge Cases
 
-- `CREATE INDEX ASYNC` where `ASYNC` appears in a comment, a quoted identifier (`"async"`), a string
-  literal, or as the index name (`CREATE INDEX async ON t (c)`): only the keyword in the DSQL
-  position is removed; everything else is unchanged.
+- `CREATE INDEX ASYNC` where `ASYNC` appears in a comment, a quoted identifier (`"async"`) or a
+  string literal: only the keyword in the DSQL position is removed; everything else is unchanged.
+  `CREATE INDEX ASYNC ON t (c)` (unquoted) is the keyword and creates an unnamed asynchronous index;
+  `CREATE INDEX "async" ON t (c)` is a synchronous index named `async` (refused by `index_sync`).
 - `CREATE INDEX ASYNC public.i ON t (c)` (schema-qualified index name) fails with `42601` `syntax
   error at or near "."`, as on DSQL; the stripped text must not make it valid.
 - `CREATE INDEX ASYNC IF NOT EXISTS i …` where `i` exists: succeeds, returns a `job_id`, nothing is
@@ -382,12 +399,23 @@ ADD COLUMN with constraint not supported` and the column does not exist.
 
 - **FR-020**: `ALTER TABLE … ADD CONSTRAINT <name> FOREIGN KEY (…) REFERENCES … [actions] NOT VALID`
   MUST be accepted and the foreign key enforced for rows written afterwards; existing rows are not
-  checked.
+  checked. It is implemented by rebuilding the table in micro-dsql's server layer (FR-024).
 - **FR-021**: `ALTER TABLE … ADD CONSTRAINT <name> CHECK (…) NOT VALID` MUST be accepted and the
-  check enforced for rows written afterwards; existing rows are not checked.
+  check enforced for rows written afterwards; existing rows are not checked (by the table rebuild
+  of FR-024 when the spike shows it works for CHECK).
 - **FR-021a**: A `NOT VALID` foreign key or CHECK form the engine cannot enforce MUST be refused
   with `0A000` and a micro-dsql text naming the form (rule catalogue source µ), never accepted
-  without enforcement.
+  without enforcement — except under the reported, owner-approved fallback of FR-024.
+- **FR-024**: The table rebuild MUST: keep every row and column value (including identity values
+  and the sequence's next value); keep the table's name, primary key, other constraints and
+  their names, defaults, and every index with its name (including indexes built by `CREATE INDEX
+  ASYNC`, whose `sys.jobs` rows stay valid); keep foreign keys of other tables that reference the
+  rebuilt table enforced; not check existing rows against the added constraint; be atomic (after
+  a failure the table is unchanged); count as one DDL statement for the transaction rules; never
+  leave a client transaction open; and make concurrent transactions that touched the table fail
+  with `40001` OC001 as any DDL does. If a spike shows any of these cannot hold, the fallback for
+  foreign keys is acceptance without enforcement (job recorded, `23503` assertion a known gap),
+  reported by the implementer.
 - **FR-022**: A NOT VALID constraint SHOULD be reported as not validated in `pg_constraint`
   (`convalidated = f`) until a successful `VALIDATE`, then `t`; if the engine's catalog cannot
   express it, the difference is recorded in docs/known-gaps.md.

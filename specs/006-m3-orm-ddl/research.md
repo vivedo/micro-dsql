@@ -229,8 +229,9 @@ unknown id, and `VALIDATE_CONSTRAINT` as the validate job type.
 
 **D1 — ASYNC handling: blank, don't delete.** `rewrite::pre_parse` replaces the five bytes of the
 `ASYNC` keyword that directly follows `CREATE [UNIQUE] INDEX` or `ALTER TABLE` (found with
-`pg_query::scan`, so comments, strings and quoted identifiers are never touched, and `CREATE INDEX
-async ON t` — `async` used as the index name, followed by `ON` — is left alone) with five spaces,
+`pg_query::scan`, so comments, strings and quoted identifiers are never touched; the unquoted word in `CREATE
+INDEX ASYNC ON t (c)` is the keyword — an unnamed asynchronous index, as on live DSQL — and only
+`"async"` is a name; owner decision 2026-11-12, §8) with five spaces,
 and returns which kind of ASYNC it removed. Same length means every byte offset (error positions,
 AST locations, later `TextEdit`s) is valid for both texts with no mapping table. The simple-query
 path runs the pre-parse over the whole query string before its syntax check and splits the
@@ -403,3 +404,79 @@ rest runs: all 7 remaining statements succeed (identity tables, two `ASYNC` inde
 jobs, `ADD COLUMN`, a second `ASYNC` index), the second run applies nothing, and the smoke passes
 every step (identity values 1 and 2, uuid/numeric/jsonb round trip, join, update, generated
 always identity, transaction commit and rollback) except the `23503` foreign-key assertion.
+
+## 8. Owner decisions after the implementation round (2026-11-12)
+
+**T033 — table rebuild in the server layer.** The core `ALTER COLUMN` path cannot add an enforced
+foreign key and checks existing rows for a CHECK (§6). Decision: no Turso patch; micro-dsql
+rebuilds the table the way SQLite implements ALTER TABLE (create a new table that carries the added
+constraint, copy the rows without checking them, recreate indexes, defaults/sequences and the
+other constraints, swap names). A time-boxed spike (tasks T071–T072) comes first. Fallback if the
+spike shows the rebuild is unsafe: accept `FOREIGN KEY … NOT VALID` without enforcement, record
+its job, mark the `23503` assertion as a known gap — reported by the implementer, never chosen
+silently. `CHECK … NOT VALID` uses the same mechanism if the spike shows it works.
+
+**ASYNC keyword.** `CREATE INDEX ASYNC ON t (c)`: the unquoted word is the keyword (unnamed
+asynchronous index, golden case `create_index_async_unnamed`); `"async"` quoted stays a name. The
+implementation already behaves this way (`crates/policy/src/rewrite.rs` tests); D1 and the spec's
+edge case are updated to say so.
+
+### 8.1 Pre-spike facts (reproduced on this branch's build, port 15506, 2026-11-12)
+
+| Probe | Result | Consequence for the rebuild |
+|---|---|---|
+| `CREATE TABLE c__new (… parent bigint REFERENCES p(id) …)`; `INSERT INTO c__new SELECT * FROM c` with an orphan row in `c` | `23503 FOREIGN KEY constraint failed` | With enforcement on, the copy checks existing rows: enforcement must be off during the copy |
+| `SET foreign_keys = off` | `0A000 setting configuration parameter "foreign_keys" not supported` (M2 whitelist; the engine has no PG setting for it either) | Not available to SQL clients, and must not become so |
+| core API (pinned rev, `core/connection.rs`) | `Connection::set_foreign_keys_enabled(bool)` and `Connection::set_check_constraints_ignored(bool)` are public, per connection, and apply to statements prepared afterwards | The server can switch FK enforcement and CHECK evaluation off for the copy on the session's own connection (`PgConnection::inner()`), then restore them |
+| `ALTER TABLE c RENAME TO c__old` while `gc` references `c` | `pg_constraint` shows `gc_cid_fkey` now pointing at the renamed table (`confrelid` = old oid) | Renaming the **old** table drags the referencing FKs with it (SQLite ≥ 3.26 behaviour). Use SQLite's order instead: build `c__new`, copy, DROP the old `c`, RENAME `c__new` → `c`, so references by name bind to the new table |
+| `DROP TABLE c__old` while `gc` has rows referencing it | `23503 FOREIGN KEY constraint failed` | The DROP of the old table must also run with FK enforcement off |
+| constraint names in a table created as `c__new` | implicit FK name became `c__new_parent_fkey` | Every constraint (PK, UNIQUE, CHECK, FK) must be written with an explicit `CONSTRAINT <old name>` in the new definition, else derived names change |
+
+### 8.2 D13 — Rebuild design (to be confirmed by the spike)
+
+Statement: `ALTER TABLE [s.]t ADD CONSTRAINT n FOREIGN KEY (col) REFERENCES … NOT VALID` or `… CHECK
+(expr) NOT VALID`, planned as `DdlAction::AddConstraintNotValid` (unchanged policy side; the client
+statement stays one DDL for the discipline rules because the policy sees one statement).
+
+Server (`constraints::rebuild_with_constraint`, new), on the session's connection:
+
+1. Read the table's full engine definition (`BTreeTable::to_sql()`, as the §6 spike did) and its
+   indexes' definitions; refuse with the engine's error if the table is missing.
+2. Build the new definition: same columns, types, defaults (incl. `nextval('<schema>.<seq>')`),
+   NOT NULLs, every existing constraint with an explicit `CONSTRAINT <current name>`, plus the
+   added table-level constraint named `n`.
+3. With `set_foreign_keys_enabled(false)` and `set_check_constraints_ignored(true)` (restored by a
+   guard on every exit path): `CREATE TABLE s.t__rebuild …`; `INSERT INTO s.t__rebuild SELECT
+   <columns> FROM s.t`; `DROP TABLE s.t`; `ALTER TABLE s.t__rebuild RENAME TO t`; recreate each
+   index with its name and definition.
+4. Atomicity: inside a client transaction the steps run in it (a failure aborts the client's block
+   as any failed DDL does). When the session is Idle, the server wraps the steps in an internal
+   `BEGIN` … `COMMIT` on the same connection (`ROLLBACK` on any error) and returns the session to
+   Idle. This is safe and outside 007's scope because: no client statement runs inside it; it
+   starts and ends within the one client statement's execution on the connection's blocking
+   thread; the policy sees `Idle` before and after (`complete` counts nothing for it); it does not
+   change how client autocommit statements execute. Seam with 007: if 007 changes how the server
+   starts transactions (e.g. a concurrent-transaction BEGIN for autocommit), the rebuild uses the
+   same helper; flagged for the orchestrator.
+5. Bookkeeping: the identity `DropTable` cleanup (D5) must not fire for the internal DROP (it only
+   fires for client `DROP TABLE` plans; the rebuild's statements are server-issued). `sys.jobs`
+   rows of earlier `ASYNC` builds keep `object_name`; their `object_id` would point at the dropped
+   index oid, so the rebuild updates `object_id` of jobs whose `object_name` names a recreated
+   index (or the spike records it as a known gap).
+6. Concurrency: like any DDL, the rebuild changes the schema; concurrent writing transactions fail
+   at their next statement or COMMIT with `40001` OC001 (B11, existing mapping). Long copies hold
+   the transaction for the copy's duration; the 3,000-row limit does not apply to server-issued
+   statements (the policy never sees them), which matches DSQL (an ALTER is not DML).
+
+Spike checklist (T071, time-boxed): (a) referencing tables' FKs still enforced and still named after
+the swap, including `ON DELETE CASCADE`; (b) indexes recreated with the same names, incl. unique and
+partial/expression ones built by `CREATE INDEX ASYNC`, and `sys.jobs` rows stay consistent; (c)
+identity values and the next `nextval` unchanged, `DROP TABLE` sequence cleanup still works after a
+rebuild; (d) the copy skips FK and CHECK checks with the two core switches, and they are restored
+(a later orphan insert fails `23503`); (e) atomicity: a failure injected after each step leaves the
+original table intact, inside and outside a client transaction, and the session's status is
+unchanged; (f) a concurrent writer gets `40001` OC001, never a hang or a corrupted table; (g)
+`pg_constraint`/`pg_get_constraintdef` show the added constraint so `VALIDATE` (D8) finds it; (h)
+column order, types (incl. `uuid`, `jsonb`, `numeric(p,s)`, `timestamptz`, `varchar(n)`) and
+`DEFAULT` expressions survive the `to_sql()` round trip. Any failed item that cannot be fixed in the
+server layer → fallback (§8 above), reported.

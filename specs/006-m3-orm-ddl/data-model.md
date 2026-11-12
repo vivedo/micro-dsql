@@ -12,8 +12,8 @@ for the signatures.
 | `async_kind` | `None`, `Index` (after `CREATE [UNIQUE] INDEX`), `AlterTable` (after `ALTER TABLE`) |
 
 Rule: only a keyword token `ASYNC` (case-insensitive, unquoted) in exactly those positions; at most
-one per statement. `CREATE INDEX async ON …` (`async` followed by `ON`) is an index name, not the
-keyword.
+one per statement. `CREATE INDEX ASYNC ON …` (unquoted) is the keyword: an unnamed asynchronous
+index (owner decision, research.md §8); only a quoted `"async"` is a name.
 
 ## TextEdit (policy, `rewrite.rs`)
 
@@ -62,12 +62,26 @@ when the table's `pg_attrdef` default is `nextval('<schema>.<table>_<column>_seq
 
 | Kind | Represented in the engine as | Checked |
 |---|---|---|
-| single-column FOREIGN KEY with ON DELETE/ON UPDATE actions | column constraint `REFERENCES t(c)` added via the core `ALTER COLUMN` path, named as given | rows written after the ALTER |
-| CHECK on one column | column constraint `CHECK (expr)` added the same way, named as given | rows written after the ALTER |
+| single-column FOREIGN KEY with ON DELETE/ON UPDATE actions | table-level `CONSTRAINT <name> FOREIGN KEY … REFERENCES …` in the rebuilt table (research.md D13) | rows written after the ALTER; existing rows copied with FK enforcement off |
+| CHECK on one column | table-level `CONSTRAINT <name> CHECK (expr)` in the rebuilt table (D13), if the spike shows it works; else today's core `ALTER COLUMN` path (validates existing rows; known gap) | rows written after the ALTER; existing rows copied with CHECK evaluation off |
 
-State: "not validated" → `VALIDATE` job `completed` → "validated". On micro-dsql the state is
-tracked only through `pg_constraint.convalidated` if the engine can store it (FR-022), else not
-at all (known gap); a VALIDATE on an already valid constraint succeeds.
+State: "not validated" → `VALIDATE` job `completed` → "validated". On micro-dsql
+`pg_constraint.convalidated` is always `true` (known gap, T039); a VALIDATE on an already valid
+constraint succeeds.
+
+## Table rebuild (server `constraints.rs`, transient)
+
+| Step | Engine statement (server-issued, never seen by the policy) | Switches |
+|---|---|---|
+| 1 | `CREATE TABLE <schema>.<table>__rebuild (<all columns, defaults, NOT NULL>, CONSTRAINT <existing name> …, CONSTRAINT <new name> …)` | — |
+| 2 | `INSERT INTO <schema>.<table>__rebuild SELECT <columns> FROM <schema>.<table>` | FK off, CHECK ignored |
+| 3 | `DROP TABLE <schema>.<table>` | FK off |
+| 4 | `ALTER TABLE <schema>.<table>__rebuild RENAME TO <table>` | FK off |
+| 5 | each index re-created with its name and definition; `sys.jobs.object_id` of recreated indexes updated | — |
+
+Invariants: one client DDL; switches restored on every exit path; atomic (client transaction, or an
+internal `BEGIN`/`COMMIT` when Idle, `ROLLBACK` on error); row count, values, sequence state,
+constraint and index names unchanged; referencing tables' foreign keys enforced afterwards.
 
 ## ConformanceReport (file, `reports/conformance-<date>.md`)
 

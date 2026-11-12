@@ -87,12 +87,19 @@ seen by the policy), so a desugared identity CREATE TABLE counts as one DDL.
 |---|---|---|
 | `sys.rs` (new) | `bootstrap(&Database)` | called from `open_database`: `CREATE SCHEMA IF NOT EXISTS sys`, `CREATE TABLE IF NOT EXISTS sys.jobs (…)` on a bootstrap connection |
 | `sys.rs` | `run_job_statement(conn, plan, run_engine) -> PgWireResult<(Outcome, u64)>` | `IndexBuild`: run engine, look up oid/name, purge + insert job, `Outcome::Rows` with `job_id`; `Validate`: delegates to `constraints::validate`; `WaitForJob`: read status → `succeeded` row or 22P02/22023 |
-| `constraints.rs` (new) | `add_not_valid(conn, action, original)`, `validate(conn, action) -> JobOutcome`, `check_drop_column(conn, action) -> Option<PolicyError>` | D7/D8; the only module using `turso_parser::ast` and `PgConnection::inner()` |
+| `constraints.rs` (new) | `add_check_not_valid(…)` (D7, interim), `rebuild_with_constraint(conn, schema, table, constraint, original) -> PgWireResult<()>` (D13, owner decision T033), `validate(conn, action) -> Job`, `check_drop_column(conn, action) -> Option<PolicyError>` | D7/D8/D13; the only module using `turso_parser::ast`, `PgConnection::inner()` and the core switches `set_foreign_keys_enabled` / `set_check_constraints_ignored` (always restored by a guard) |
 | `ddl.rs` (new) | `run_ddl_statement(conn, plan, run_engine)` | prelude, `cleanup_on_failure`, `DropTable` sequence cleanup, `AddConstraintNotValid`, `DropColumn` check |
 | `dsql::run_planned` | `dsql.rs` (shared with 007) | **one** added branch in the `Admission::Run` arm: `if plan.job.is_some() → sys::run_job_statement`, `else if plan.ddl.is_some() or !plan.prelude.is_empty() → ddl::run_ddl_statement`, else today's `run_engine(sql)`; `respond` gains the `Reply::Rows` arm |
 | `run_simple_query` | `lib.rs` (shared) | syntax check on `pre_parse(text).text`; split the original text (scanner split accepts ASYNC) |
 | `PgStatement::analyze` / `parse_sql` | `lib.rs` (shared) | parse/describe on the pre-parsed text; Describe uses `plan.reply_columns()` |
 | `Outcome::Rows` | `lib.rs` | reused for job rows (header built by a helper next to `show_fields`) |
+
+## 4a. Table rebuild (D13) seam
+
+`rebuild_with_constraint` runs server-issued statements only (never through the policy). Inside a
+client transaction it uses that transaction; when Idle it opens an internal `BEGIN`/`COMMIT` on the
+session's connection and always leaves it Idle (research.md §8.2 item 4). If 007 adds a
+transaction-start helper, the rebuild must use it (orchestrator seam).
 
 ## 5. What 006 does not touch (007 seams)
 
