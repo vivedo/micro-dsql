@@ -17,6 +17,7 @@ tokio.workspace = true
 tracing.workspace = true
 turso_core.workspace = true
 turso_pg.workspace = true
+turso_parser.workspace = true
 turso_pg_parser.workspace = true
 micro-dsql-policy.workspace = true
 

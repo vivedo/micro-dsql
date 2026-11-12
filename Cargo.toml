@@ -13,6 +13,7 @@ license = "MIT"
 # Bump deliberately, together, with the full gate set.
 turso_core = { git = "https://github.com/tursodatabase/turso", rev = "d5fdf4d876ad7eb68e9cbef9a88e6b65c56b19f5", features = ["conn_raw_api"] }
 turso_pg = { git = "https://github.com/tursodatabase/turso", rev = "d5fdf4d876ad7eb68e9cbef9a88e6b65c56b19f5" }
+turso_parser = { git = "https://github.com/tursodatabase/turso", rev = "d5fdf4d876ad7eb68e9cbef9a88e6b65c56b19f5" }
 turso_pg_parser = { git = "https://github.com/tursodatabase/turso", rev = "d5fdf4d876ad7eb68e9cbef9a88e6b65c56b19f5" }
 
 pgwire = "0.36"
