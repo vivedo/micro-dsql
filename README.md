@@ -16,6 +16,20 @@ psql "host=127.0.0.1 port=5432 user=admin dbname=postgres password=anything sslm
 # done: CREATE TABLE, INSERT, SELECT, BEGIN/COMMIT ...
 ```
 
+## Docker
+
+The image is built `FROM scratch` around a static (musl) binary, about 36 MB:
+
+```sh
+docker build -t micro-dsql .
+docker run --rm -p 5432:5432 micro-dsql
+# keep data between runs: mount a volume on /data
+docker run --rm -p 5432:5432 -v micro-dsql-data:/data micro-dsql --listen 0.0.0.0:5432 --data /data/postgres.db
+```
+
+The container runs as an unprivileged user and stops cleanly on `docker stop`. There is no
+shell in the image; use `pg_isready` from the host or another container as a health check.
+
 ## Usage
 
 ```
@@ -57,6 +71,7 @@ crates/
   policy/       DSQL rules on the pg_query AST, engine-agnostic
 tests/psql/     target-agnostic psql scenarios and DSQL-rule probes (see its README)
 scripts/        MiniStack reference setup and the differential comparison
+docker/         container build helper (see Dockerfile)
 docs/           plan and known gaps
 research/       background research and the M0 spike
 specs/          feature specifications, plans and task lists
