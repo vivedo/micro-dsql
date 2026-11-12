@@ -1,0 +1,9 @@
+CREATE TABLE p09_s (id serial PRIMARY KEY);
+psql:09_serial_column.sql:6: ERROR:  0A000: type "serial" is not supported
+CREATE TABLE p09_b (id bigserial PRIMARY KEY);
+psql:09_serial_column.sql:7: ERROR:  0A000: type "bigserial" is not supported
+CREATE TABLE p09_ss (id smallserial PRIMARY KEY);
+psql:09_serial_column.sql:8: ERROR:  0A000: type "smallserial" is not supported
+DROP TABLE IF EXISTS p09_s;
+DROP TABLE IF EXISTS p09_b;
+DROP TABLE IF EXISTS p09_ss;

@@ -1,0 +1,51 @@
+DROP TABLE IF EXISTS p28_t;
+CREATE TABLE p28_t (id int PRIMARY KEY, c1 int, c2 int, c3 int, c4 int, c5 int, c6 int, c7 int, c8 int, c9 int, s text);
+CREATE INDEX CONCURRENTLY p28_conc ON p28_t (c1);
+psql:28_index_forms.sql:9: ERROR:  0A000: CONCURRENTLY not supported for CREATE INDEX
+CREATE INDEX ASYNC p28_hash ON p28_t USING hash (c1);
+psql:28_index_forms.sql:10: ERROR:  0A000: USING not supported for CREATE INDEX
+CREATE INDEX ASYNC IF NOT EXISTS ON p28_t (c1);
+psql:28_index_forms.sql:11: ERROR:  42601: syntax error at or near "ON"
+CREATE INDEX ASYNC p28_nine ON p28_t (c1, c2, c3, c4, c5, c6, c7, c8, c9);
+psql:28_index_forms.sql:12: ERROR:  54011: more than 8 column keys in an index are not supported
+CREATE INDEX ASYNC p28_eight ON p28_t (c1, c2, c3, c4, c5, c6, c7, c8) \gset
+SELECT sys.wait_for_job(:'job_id') AS eight_columns;
+ wait_for_job 
+--------------
+ t
+(1 row)
+
+CREATE INDEX ASYNC p28_expr ON p28_t (lower(s)) \gset
+SELECT sys.wait_for_job(:'job_id') AS expression_index;
+ wait_for_job 
+--------------
+ t
+(1 row)
+
+CREATE INDEX ASYNC p28_partial ON p28_t (c2) WHERE c2 > 0 \gset
+SELECT sys.wait_for_job(:'job_id') AS partial_index;
+ wait_for_job 
+--------------
+ t
+(1 row)
+
+CREATE INDEX ASYNC p28_volatile ON p28_t (c3) WHERE c3 > random();
+psql:28_index_forms.sql:19: ERROR:  42P17: functions in index predicate must be marked IMMUTABLE
+CREATE INDEX ASYNC p28_incl ON p28_t (c4) INCLUDE (c5) \gset
+SELECT sys.wait_for_job(:'job_id') AS include_index;
+ wait_for_job 
+--------------
+ t
+(1 row)
+
+SELECT indexname FROM pg_indexes WHERE tablename = 'p28_t' ORDER BY indexname;
+  indexname  
+-------------
+ p28_eight
+ p28_expr
+ p28_incl
+ p28_partial
+ p28_t_pkey
+(5 rows)
+
+DROP TABLE p28_t;

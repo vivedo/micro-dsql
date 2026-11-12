@@ -1,0 +1,12 @@
+CREATE EXTENSION pgcrypto;
+psql:08_create_extension.sql:6: ERROR:  0A000: CREATE EXTENSION is not supported
+CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
+psql:08_create_extension.sql:7: ERROR:  0A000: CREATE EXTENSION is not supported
+SELECT length(gen_random_uuid()::text) AS builtin_uuid_length;
+ builtin_uuid_length 
+---------------------
+                  36
+(1 row)
+
+DROP EXTENSION IF EXISTS pgcrypto;
+DROP EXTENSION IF EXISTS "uuid-ossp";

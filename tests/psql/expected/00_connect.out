@@ -1,0 +1,25 @@
+ one 
+-----
+   1
+(1 row)
+
+ has_current_user 
+------------------
+ t
+(1 row)
+
+ current_database 
+------------------
+ postgres
+(1 row)
+
+ server_version_is_16 
+----------------------
+ t
+(1 row)
+
+ TimeZone 
+----------
+ UTC
+(1 row)
+

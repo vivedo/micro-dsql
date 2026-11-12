@@ -1,0 +1,20 @@
+DROP TABLE IF EXISTS p02_t;
+CREATE TABLE p02_t (id int PRIMARY KEY);
+BEGIN;
+INSERT INTO p02_t VALUES (1);
+SAVEPOINT sp1;
+psql:02_savepoint.sql:10: ERROR:  0A000: SAVEPOINT is not supported
+INSERT INTO p02_t VALUES (2);
+psql:02_savepoint.sql:11: ERROR:  25P02: current transaction is aborted, commands ignored until end of transaction block
+ROLLBACK TO SAVEPOINT sp1;
+psql:02_savepoint.sql:12: ERROR:  3B001: savepoint "sp1" does not exist
+RELEASE SAVEPOINT sp1;
+psql:02_savepoint.sql:13: ERROR:  25P02: current transaction is aborted, commands ignored until end of transaction block
+COMMIT;
+SELECT count(*) AS rows_kept FROM p02_t;
+ rows_kept 
+-----------
+         0
+(1 row)
+
+DROP TABLE p02_t;

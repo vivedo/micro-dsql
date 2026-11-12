@@ -1,0 +1,43 @@
+DROP TABLE IF EXISTS p05_t;
+CREATE TABLE p05_t (id int PRIMARY KEY, v text);
+-- Column names and types (rows are volatile, so the query itself is discarded).
+SELECT * FROM sys.jobs \gdesc
+   Column    |           Type           
+-------------+--------------------------
+ job_id      | text
+ status      | text
+ details     | text
+ job_type    | text
+ class_id    | oid
+ object_id   | oid
+ object_name | text
+ start_time  | timestamp with time zone
+ update_time | timestamp with time zone
+(9 rows)
+
+SELECT * FROM sys.jobs \g /dev/null
+CREATE INDEX ASYNC p05_v ON p05_t (v) \gset
+SELECT sys.wait_for_job(:'job_id') AS wait_for_job;
+ wait_for_job 
+--------------
+ t
+(1 row)
+
+SELECT status, job_type, object_name FROM sys.jobs WHERE job_id = :'job_id';
+  status   |  job_type   | object_name  
+-----------+-------------+--------------
+ completed | INDEX_BUILD | public.p05_v
+(1 row)
+
+SELECT sys.dsql_major_version();
+psql:05_sys_jobs.sql:14: ERROR:  42883: function sys.dsql_major_version() does not exist
+LINE 1: SELECT sys.dsql_major_version();
+               ^
+HINT:  No function matches the given name and argument types. You might need to add explicit type casts.
+SELECT sys.wait_for_job('notajobid') AS malformed_job_id;
+ wait_for_job 
+--------------
+ f
+(1 row)
+
+DROP TABLE p05_t;

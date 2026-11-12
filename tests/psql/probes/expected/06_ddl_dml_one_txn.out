@@ -1,0 +1,23 @@
+DROP TABLE IF EXISTS p06_a;
+DROP TABLE IF EXISTS p06_b;
+CREATE TABLE p06_a (id int PRIMARY KEY);
+-- DDL then DML
+BEGIN;
+CREATE TABLE p06_b (id int PRIMARY KEY);
+INSERT INTO p06_b VALUES (1);
+psql:06_ddl_dml_one_txn.sql:12: ERROR:  25006: DDL and DML statements cannot be mixed in a transaction
+COMMIT;
+-- DML then DDL
+BEGIN;
+INSERT INTO p06_a VALUES (1);
+ALTER TABLE p06_a ADD COLUMN v text;
+psql:06_ddl_dml_one_txn.sql:17: ERROR:  25006: DDL and DML statements cannot be mixed in a transaction
+ROLLBACK;
+SELECT to_regclass('p06_b') IS NOT NULL AS p06_b_exists;
+ p06_b_exists 
+--------------
+ f
+(1 row)
+
+DROP TABLE IF EXISTS p06_a;
+DROP TABLE IF EXISTS p06_b;

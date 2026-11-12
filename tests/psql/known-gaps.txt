@@ -1,0 +1,4 @@
+# Known gaps (constitution Principle V): layer-1 scenarios that run.sh skips.
+# One entry per line: <scenario name> <reason>. Blank lines and # comments are ignored.
+# Every entry here must also be recorded in KNOWN_GAPS.md with the observed error
+# and a suspected cause. Remove the entry in the change that makes the scenario pass.

@@ -1,0 +1,16 @@
+DROP TABLE IF EXISTS p29_t;
+CREATE TABLE p29_t (id int PRIMARY KEY);
+BEGIN;
+INSERT INTO p29_t VALUES (1);
+TRUNCATE p29_t;
+psql:29_txn_abort.sql:11: ERROR:  0A000: TRUNCATE is not supported
+SELECT 1 AS after_refusal;
+psql:29_txn_abort.sql:12: ERROR:  25P02: current transaction is aborted, commands ignored until end of transaction block
+ROLLBACK;
+SELECT count(*) AS rows_after_rollback FROM p29_t;
+ rows_after_rollback 
+---------------------
+                   0
+(1 row)
+
+DROP TABLE p29_t;

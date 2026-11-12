@@ -1,0 +1,24 @@
+-- probe 11_isolation_levels: DSQL accepts only REPEATABLE READ (the default).
+-- Report-only. Expected output is the MiniStack (DSQL_STRICT=1) reference behaviour.
+\set ON_ERROR_STOP 0
+\set VERBOSITY verbose
+\set ECHO all
+SHOW transaction_isolation;
+BEGIN;
+SHOW transaction_isolation;
+COMMIT;
+BEGIN ISOLATION LEVEL REPEATABLE READ;
+COMMIT;
+START TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY;
+COMMIT;
+BEGIN ISOLATION LEVEL READ COMMITTED;
+SHOW transaction_isolation;
+ROLLBACK;
+BEGIN ISOLATION LEVEL SERIALIZABLE;
+ROLLBACK;
+BEGIN ISOLATION LEVEL READ UNCOMMITTED;
+ROLLBACK;
+BEGIN;
+SET TRANSACTION ISOLATION LEVEL SERIALIZABLE;
+ROLLBACK;
+SET default_transaction_isolation = 'serializable';

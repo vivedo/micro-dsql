@@ -1,0 +1,35 @@
+ id |  name  | qty 
+----+--------+-----
+  1 | apple  |  10
+  2 | banana |  20
+  3 | cherry |  30
+(3 rows)
+
+ id |  name  | qty 
+----+--------+-----
+  3 | cherry |  30
+  2 | banana |  20
+(2 rows)
+
+ id | qty 
+----+-----
+  2 |  21
+(1 row)
+
+ id |  name  | qty 
+----+--------+-----
+  1 | apple  |  10
+  2 | banana |  21
+  3 | cherry |  30
+(3 rows)
+
+ id 
+----
+  1
+(1 row)
+
+ remaining 
+-----------
+         2
+(1 row)
+

@@ -1,0 +1,34 @@
+SHOW transaction_isolation;
+ transaction_isolation 
+-----------------------
+ read committed
+(1 row)
+
+BEGIN;
+SHOW transaction_isolation;
+ transaction_isolation 
+-----------------------
+ read committed
+(1 row)
+
+COMMIT;
+BEGIN ISOLATION LEVEL REPEATABLE READ;
+COMMIT;
+START TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY;
+COMMIT;
+BEGIN ISOLATION LEVEL READ COMMITTED;
+SHOW transaction_isolation;
+ transaction_isolation 
+-----------------------
+ read committed
+(1 row)
+
+ROLLBACK;
+BEGIN ISOLATION LEVEL SERIALIZABLE;
+ROLLBACK;
+BEGIN ISOLATION LEVEL READ UNCOMMITTED;
+ROLLBACK;
+BEGIN;
+SET TRANSACTION ISOLATION LEVEL SERIALIZABLE;
+ROLLBACK;
+SET default_transaction_isolation = 'serializable';

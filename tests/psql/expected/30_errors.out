@@ -1,0 +1,16 @@
+psql:30_errors.sql:8: ERROR:  23505: duplicate key value violates unique constraint "t1_errors_pkey"
+DETAIL:  Key (id)=(1) already exists.
+SCHEMA NAME:  public
+TABLE NAME:  t1_errors
+CONSTRAINT NAME:  t1_errors_pkey
+psql:30_errors.sql:10: ERROR:  42P01: relation "t1_no_such_table" does not exist
+LINE 1: SELECT * FROM t1_no_such_table;
+                      ^
+psql:30_errors.sql:12: ERROR:  42601: syntax error at or near "SELEC"
+LINE 1: SELEC 1;
+        ^
+ id |   v   
+----+-------
+  1 | first
+(1 row)
+

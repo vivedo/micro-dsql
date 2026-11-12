@@ -1,0 +1,56 @@
+SELECT current_user, session_user;
+ current_user | session_user 
+--------------+--------------
+ postgres     | postgres
+(1 row)
+
+SHOW is_superuser;
+ is_superuser 
+--------------
+ on
+(1 row)
+
+SHOW server_version;
+ server_version 
+----------------
+ 16.15
+(1 row)
+
+SHOW server_encoding;
+ server_encoding 
+-----------------
+ UTF8
+(1 row)
+
+SHOW client_encoding;
+ client_encoding 
+-----------------
+ UTF8
+(1 row)
+
+SHOW DateStyle;
+ DateStyle 
+-----------
+ ISO, MDY
+(1 row)
+
+SHOW standard_conforming_strings;
+ standard_conforming_strings 
+-----------------------------
+ on
+(1 row)
+
+SHOW integer_datetimes;
+ integer_datetimes 
+-------------------
+ on
+(1 row)
+
+SELECT datcollate FROM pg_database WHERE datname = current_database();
+ datcollate 
+------------
+ en_US.utf8
+(1 row)
+
+CREATE DATABASE p12_db;
+psql:12_session_identity.sql:15: ERROR:  0A000: CREATE DATABASE is not supported
