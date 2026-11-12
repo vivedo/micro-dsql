@@ -59,9 +59,9 @@ pub enum Admission<'a> {
     RollbackThenRefuse(PolicyError),
 }
 
-/// State of one explicit transaction.
+/// State of one explicit transaction (M4 adds the doomed-transaction flag here).
 #[derive(Debug, Clone)]
-struct TxnState {
+pub struct TxnState {
     /// When the engine status went from idle to active.
     began_at: Instant,
     /// DDL statements that ran successfully.

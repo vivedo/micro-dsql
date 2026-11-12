@@ -36,6 +36,6 @@ pub use errors::{
 };
 pub use intercept::{intercept, Intercept};
 pub use params::{analyze, ParamHint, ResultHint, StatementShape};
-pub use session::{Admission, PolicyLimits, Reply, SessionPolicy, TxnStatus};
+pub use session::{Admission, PolicyLimits, Reply, SessionPolicy, TxnState, TxnStatus};
 pub use settings::{SessionSettings, SettingCommand};
 pub use statement::StatementPlan;
