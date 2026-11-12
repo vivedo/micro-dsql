@@ -6,6 +6,7 @@ mod crud;
 mod dsql_conflicts;
 mod dsql_ddl;
 mod dsql_jobs;
+mod dsql_locking;
 mod dsql_rules;
 mod dsql_settings;
 mod errors;

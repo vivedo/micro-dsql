@@ -58,6 +58,17 @@ pub fn oc001() -> PolicyError {
     )
 }
 
+/// `0A000`: a locking clause (`FOR UPDATE`, `FOR KEY SHARE`) on something other than a
+/// single-table SELECT. DSQL's own text for these forms has not been recorded; replace this one
+/// when it is.
+pub fn locking_read_form() -> PolicyError {
+    PolicyError::new(
+        "locking_read_form",
+        "0A000",
+        "locking clause is only supported on a single-table SELECT",
+    )
+}
+
 /// `54000`: more rows changed in one transaction than DSQL allows.
 pub fn row_limit() -> PolicyError {
     PolicyError::new("txn_row_limit", "54000", "transaction row limit exceeded")

@@ -7,6 +7,7 @@ use crate::errors::PolicyError;
 use crate::identity::desugar;
 use crate::intercept::{intercept_node, Intercept};
 use crate::jobs::{ddl_action, job_action, DdlAction, JobAction};
+use crate::locking::{plan_locking, LockingRead};
 use crate::rewrite::{apply_edits, ast_rewrites, pre_parse, AsyncKind};
 use crate::rules::{check_rules, RuleContext};
 use crate::session::{ColumnType, ReplyColumn};
@@ -40,6 +41,9 @@ pub struct StatementPlan {
     pub job: Option<JobAction>,
     /// DDL the server runs with extra work.
     pub ddl: Option<DdlAction>,
+    /// A `SELECT ... FOR UPDATE / FOR KEY SHARE` split into touch and read (`engine_sql` is the
+    /// read).
+    pub locking: Option<LockingRead>,
 }
 
 impl StatementPlan {
@@ -61,6 +65,7 @@ impl StatementPlan {
             cleanup_on_failure: Vec::new(),
             job: None,
             ddl: None,
+            locking: None,
         };
         let Ok(parsed) = pg_query::parse(&text) else {
             // The engine reports the syntax error, on the text with `ASYNC` blanked.
@@ -80,9 +85,21 @@ impl StatementPlan {
             Ok(setting) => (setting, check_set_config(&text)),
             Err(error) => (None, Some(error)),
         };
-        let refusal = check_rules(node, &text, &RuleContext { async_kind }).or(setting_refusal);
+        let (locking, locking_refusal) = match plan_locking(node) {
+            Some(Ok(locking)) => (Some(locking), None),
+            Some(Err(error)) => (None, Some(error)),
+            None => (None, None),
+        };
+        let refusal = check_rules(node, &text, &RuleContext { async_kind })
+            .or(setting_refusal)
+            .or(locking_refusal);
+        let engine_sql = match &locking {
+            Some(locking) => locking.read_sql.clone(),
+            None => apply_edits(&text, &edits).into_owned(),
+        };
         let mut planned = Self {
-            engine_sql: apply_edits(&text, &edits).into_owned(),
+            engine_sql,
+            locking,
             class: classify(node),
             refusal,
             setting,
@@ -100,6 +117,7 @@ impl StatementPlan {
             planned.cleanup_on_failure.clear();
             planned.job = None;
             planned.ddl = None;
+            planned.locking = None;
         }
         planned
     }
@@ -284,5 +302,33 @@ mod tests {
             assert!(plan.prelude.is_empty(), "{sql}");
             assert!(plan.cleanup_on_failure.is_empty(), "{sql}");
         }
+    }
+
+    #[test]
+    fn a_locking_read_is_planned_as_touch_and_read() {
+        let plan = StatementPlan::new("SELECT s FROM t WHERE id = 1 FOR UPDATE");
+        assert_eq!(plan.refusal, None);
+        assert_eq!(plan.class, StatementClass::Read);
+        assert_eq!(plan.original, "SELECT s FROM t WHERE id = 1 FOR UPDATE");
+        assert_eq!(plan.engine_sql, "SELECT s FROM t WHERE id = 1");
+        let locking = plan.locking.expect("planned");
+        assert_eq!(
+            locking.touch.unwrap().render("v"),
+            "UPDATE t SET v = v WHERE id = 1"
+        );
+        let plan = StatementPlan::new("SELECT s FROM t FOR KEY SHARE");
+        assert_eq!(plan.engine_sql, "SELECT s FROM t");
+        assert!(plan.locking.is_some_and(|l| l.touch.is_none()));
+        assert_eq!(StatementPlan::new("SELECT 1").locking, None);
+    }
+
+    #[test]
+    fn unsupported_locking_forms_are_refused_and_other_strengths_keep_their_rule() {
+        let plan = StatementPlan::new("SELECT * FROM a JOIN b ON a.id = b.id FOR UPDATE");
+        assert_eq!(plan.refusal.map(|e| e.rule), Some("locking_read_form"));
+        assert_eq!(plan.locking, None);
+        let plan = StatementPlan::new("SELECT * FROM t FOR SHARE");
+        assert_eq!(plan.refusal.map(|e| e.rule), Some("unsupported_locking"));
+        assert_eq!(plan.locking, None);
     }
 }

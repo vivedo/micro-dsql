@@ -11,14 +11,14 @@ use std::sync::{Mutex, MutexGuard};
 use std::time::{Duration, Instant};
 
 use micro_dsql_policy::{
-    EngineFailure, SessionPolicy, StatementClass, StatementPlan, TxnControl, TxnStatus,
+    EngineFailure, SessionPolicy, StatementClass, StatementPlan, TouchPlan, TxnControl, TxnStatus,
 };
 use pgwire::api::portal::Format;
 use pgwire::error::{PgWireError, PgWireResult};
 use tracing::debug;
 use turso_pg::PgConnection;
 
-use crate::internal::exec;
+use crate::internal::{exec, ident};
 use crate::{dsql, Outcome};
 
 /// Switches of the OCC emulation (`ServerOptions::occ`).
@@ -124,16 +124,20 @@ pub(crate) fn internal_transaction<T>(
 
 /// An autocommit DML statement as a single-statement transaction: `BEGIN`, the statement, the
 /// row limit, `COMMIT`; any failure rolls back and is reported; contention retries the whole
-/// attempt (it applied nothing).
+/// attempt (it applied nothing). A `FOR UPDATE` read touches its rows first.
 fn implicit_transaction(
     conn: &PgConnection,
     policy: &Mutex<SessionPolicy>,
     engine: &mut dyn Engine,
+    touch: Option<&str>,
     sql: &str,
 ) -> PgWireResult<(Outcome, u64)> {
     with_busy_retry(|| {
         exec(conn, "BEGIN")?;
         let result = (|| {
+            if let Some(touch) = touch {
+                engine.run(touch)?;
+            }
             let (outcome, rows) = engine.run(sql)?;
             lock(policy)
                 .check_implicit_rows(rows)
@@ -200,6 +204,61 @@ fn defer_conflict(
     }
 }
 
+/// The column a touch rewrites to itself: the first one that is not part of the primary key
+/// (so no key is rewritten), else the first. `None` when the table cannot be found: the read
+/// then reports the usual error.
+fn touch_column(conn: &PgConnection, touch: &TouchPlan) -> Option<String> {
+    let schema = conn.inner().current_schema();
+    let table = schema
+        .namespace_named(touch.schema().unwrap_or("public"))
+        .and_then(|namespace| schema.get_btree_table(namespace, touch.relation()));
+    if let Some(table) = table {
+        let names: Vec<&str> = table
+            .columns()
+            .iter()
+            .filter_map(|column| column.name.as_deref())
+            .collect();
+        let in_key = |name: &str| {
+            table
+                .primary_key_columns
+                .iter()
+                .any(|(key, _)| key.eq_ignore_ascii_case(name))
+        };
+        let chosen = names.iter().find(|name| !in_key(name)).or(names.first());
+        return chosen.map(|name| (*name).to_owned());
+    }
+    // The schema lookup failed: ask the engine for the table's first column.
+    let qualified = match touch.schema() {
+        Some(schema) => format!("{}.{}", ident(schema), ident(touch.relation())),
+        None => ident(touch.relation()),
+    };
+    let stmt = conn
+        .prepare(format!("SELECT * FROM {qualified} LIMIT 0"))
+        .ok()?;
+    (stmt.num_columns() > 0).then(|| stmt.get_column_name(0).into_owned())
+}
+
+/// Runs a statement of an explicit transaction. With deferral on, a write conflict does not
+/// fail it (DSQL reports conflicts at `COMMIT`): see [`defer_conflict`].
+fn run_in_transaction(
+    conn: &PgConnection,
+    policy: &Mutex<SessionPolicy>,
+    opts: &OccOptions,
+    engine: &mut dyn Engine,
+    sql: &str,
+) -> PgWireResult<(Outcome, u64)> {
+    match engine.run(sql) {
+        Err(error)
+            if opts.defer_conflicts
+                && failure_of(&error) == Some(EngineFailure::DataConflict)
+                && !lock(policy).is_implicit() =>
+        {
+            defer_conflict(conn, policy, opts, engine, sql, error)
+        }
+        other => other,
+    }
+}
+
 /// The engine closure `run_planned` calls for the client's statement: the statement itself,
 /// inside whatever wrapper its situation calls for.
 fn run_wrapped(
@@ -211,18 +270,29 @@ fn run_wrapped(
     sql: &str,
 ) -> PgWireResult<(Outcome, u64)> {
     let status = dsql::txn_status(conn);
+    // The touch of a `FOR UPDATE`; in a failed block the engine answers the read with 25P02.
+    let touch = plan
+        .locking
+        .as_ref()
+        .and_then(|locking| locking.touch.as_ref())
+        .filter(|_| status != TxnStatus::Aborted)
+        .and_then(|touch| touch_column(conn, touch).map(|column| touch.render(&column)));
     match (plan.class, status) {
-        (StatementClass::Dml, TxnStatus::Idle) => implicit_transaction(conn, policy, engine, sql),
+        (StatementClass::Dml, TxnStatus::Idle) => {
+            implicit_transaction(conn, policy, engine, None, sql)
+        }
+        (_, TxnStatus::Idle) if touch.is_some() => {
+            implicit_transaction(conn, policy, engine, touch.as_deref(), sql)
+        }
         (StatementClass::Ddl, TxnStatus::Idle) => with_busy_retry(|| engine.run(sql)),
-        (StatementClass::Dml, TxnStatus::Active)
-            if opts.defer_conflicts && !lock(policy).is_implicit() =>
-        {
-            match engine.run(sql) {
-                Err(error) if failure_of(&error) == Some(EngineFailure::DataConflict) => {
-                    defer_conflict(conn, policy, opts, engine, sql, error)
-                }
-                other => other,
+        (StatementClass::Dml, TxnStatus::Active) => {
+            run_in_transaction(conn, policy, opts, engine, sql)
+        }
+        (_, TxnStatus::Active) if touch.is_some() => {
+            if let Some(touch) = &touch {
+                run_in_transaction(conn, policy, opts, engine, touch)?;
             }
+            run_in_transaction(conn, policy, opts, engine, sql)
         }
         _ => engine.run(sql),
     }
