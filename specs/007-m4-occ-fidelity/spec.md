@@ -44,7 +44,8 @@ effort, and writes down what stays different.
 ### Session 2026-11-12
 
 The owner could not be asked during this run; each answer is the recommended default, chosen for
-consistency with the constitution and docs/plan.md.
+consistency with the constitution and docs/plan.md. The five questions below are the full quota of
+this session; lower-impact gaps found by the coverage scan are resolved in Assumptions.
 
 - Q: Do the deferred-conflict and snapshot-at-BEGIN behaviours apply by default, or behind a switch? → A: By default, as on DSQL; an embedding test server can turn each off (no new command-line flag, docs/plan.md §3 keeps the surface tiny).
 - Q: What does a statement report when its write conflict is deferred to COMMIT? → A: Its normal result, obtained by re-running it once on a fresh snapshot; if that re-run also conflicts, the command tag reports 0 rows and no result rows.
@@ -368,5 +369,9 @@ statement fails, with which SQLSTATE and text, and the final data.
   as in M2).
 - Feature 006 (M3) is merged into `main` before this feature is implemented; the two features
   touch some of the same files (listed in plan.md).
+- Observability follows M2 (FR-054 of feature 005): a deferred conflict, a transparent retry and a
+  residual-contention OC001 are each logged once at debug level; nothing new at info level.
+- No new command-line flag: the deferral and snapshot switches exist only for embedding test
+  servers (docs/plan.md §3 keeps the command line tiny).
 - Live-DSQL and MiniStack differential verification are done by the owner/orchestrator, not in
   this feature's automated gates.
