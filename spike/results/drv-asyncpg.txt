@@ -1,0 +1,25 @@
+[asyncpg] version asyncpg 0.32.0
+[asyncpg] connect: OK server_version=ServerVersion(major=16, minor=0, micro=6, releaselevel='final', serial=0)
+[asyncpg] drop (simple protocol): OK DROP TABLE
+[asyncpg] create: OK CREATE TABLE
+[asyncpg] select no params (extended): OK 1
+[asyncpg] insert params bigint+text: ERR client InterfaceError: the server expects 0 arguments for this query, 2 were passed
+HINT:  Check the query against the passed list of arguments.  Note that parameters are supported only in SELECT, INSERT, UPDATE, DELETE, MERGE and VALUES statements, and will *not* work in statements  like CREATE VIEW or DECLARE CURSOR.
+[asyncpg] insert params all types: ERR client InterfaceError: the server expects 0 arguments for this query, 7 were passed
+HINT:  Check the query against the passed list of arguments.  Note that parameters are supported only in SELECT, INSERT, UPDATE, DELETE, MERGE and VALUES statements, and will *not* work in statements  like CREATE VIEW or DECLARE CURSOR.
+[asyncpg] select by param: ERR client InterfaceError: the server expects 0 arguments for this query, 1 was passed
+HINT:  Check the query against the passed list of arguments.  Note that parameters are supported only in SELECT, INSERT, UPDATE, DELETE, MERGE and VALUES statements, and will *not* work in statements  like CREATE VIEW or DECLARE CURSOR.
+[asyncpg] select all types: ERR client InterfaceError: the server expects 0 arguments for this query, 1 was passed
+HINT:  Check the query against the passed list of arguments.  Note that parameters are supported only in SELECT, INSERT, UPDATE, DELETE, MERGE and VALUES statements, and will *not* work in statements  like CREATE VIEW or DECLARE CURSOR.
+[asyncpg] update by param: ERR client InterfaceError: the server expects 0 arguments for this query, 2 were passed
+HINT:  Check the query against the passed list of arguments.  Note that parameters are supported only in SELECT, INSERT, UPDATE, DELETE, MERGE and VALUES statements, and will *not* work in statements  like CREATE VIEW or DECLARE CURSOR.
+[asyncpg] explicit txn commit (no params): OK 30
+[asyncpg] explicit txn rollback: OK rows with id 4: 0
+[asyncpg] delete by param: ERR client InterfaceError: the server expects 0 arguments for this query, 1 was passed
+HINT:  Check the query against the passed list of arguments.  Note that parameters are supported only in SELECT, INSERT, UPDATE, DELETE, MERGE and VALUES statements, and will *not* work in statements  like CREATE VIEW or DECLARE CURSOR.
+[asyncpg] delete literal: OK DELETE 0
+[asyncpg] count: OK 1
+[asyncpg] error SQLSTATE (dup key): ERR 23505 duplicate key value violates unique constraint "drv_asyncpg_pkey"
+[asyncpg] close: ERR client TimeoutError (graceful close did not complete in 5s)
+[asyncpg] failures=7
+exit=0

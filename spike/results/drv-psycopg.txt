@@ -1,0 +1,39 @@
+[psycopg] version psycopg 3.3.8, libpq 180006
+[psycopg] connect: OK server_version=16.6-pgwire-0.36.3
+[psycopg] drop: OK
+[psycopg] create: OK
+[psycopg] insert params: ERR XX000 invalid integer parameter: invalid digit found in string
+[psycopg] select by param: ERR XX000 invalid integer parameter: invalid digit found in string
+[psycopg] type round trip: ERR XX000 invalid integer parameter: invalid digit found in string
+[psycopg] update by param: ERR XX000 invalid integer parameter: invalid digit found in string
+[psycopg] explicit txn commit: ERR XX000 invalid integer parameter: invalid digit found in string
+[psycopg] explicit txn rollback: ERR XX000 invalid integer parameter: invalid digit found in string
+[psycopg] default (non-autocommit) connection commit: ERR XX000 invalid integer parameter: invalid digit found in string
+[psycopg] binary params (%b): ERR XX000 invalid integer parameter: invalid digit found in string
+[psycopg] binary params select: ERR XX000 invalid integer parameter: invalid digit found in string
+[psycopg] binary results: ERR XX000 invalid integer parameter: invalid digit found in string
+[psycopg] server-side prepared (prepare=True): ERR XX000 invalid integer parameter: invalid digit found in string
+[psycopg] executemany: ERR XX000 invalid integer parameter: invalid digit found in string
+[psycopg] delete by param: ERR XX000 invalid integer parameter: invalid digit found in string
+[psycopg] count: OK ('0',)
+[psycopg] error SQLSTATE (dup key): OK <psycopg.Cursor [COMMAND_OK] [IDLE] (host=127.0.0.1 user=admin database=postgres) at 0x10797c7d0>
+[psycopg] failures=13
+[psycopg-text] drop: OK
+[psycopg-text] create: OK
+[psycopg-text] insert params: OK 1
+[psycopg-text] select by param: OK (1, 'one', 1, 1.5, True, datetime.datetime(2026, 11, 12, 10, 0, 0, 123000, tzinfo=zoneinfo.ZoneInfo(key='Etc/UTC')), UUID('11111111-1111-1111-1111-111111111111'), {'a': 1})
+[psycopg-text] type round trip: OK DIFF at=datetime.datetime(2026, 11, 12, 10, 0, 0, 123000, tzinfo=zoneinfo.ZoneInfo(key='Etc/UTC')) (sent 2026-11-12T10:00:00.123456+00:00)
+[psycopg-text] update by param: OK 1
+[psycopg-text] explicit txn commit: OK (20,)
+[psycopg-text] explicit txn rollback: OK rows with id 3: 0
+[psycopg-text] default (non-autocommit) connection commit: OK committed rows: 1
+[psycopg-text] binary params (%b): ERR XX000 invalid integer parameter: invalid digit found in string
+[psycopg-text] binary params select: ERR XX000 invalid integer parameter: invalid digit found in string
+[psycopg-text] binary results: ERR None timestamp too large (after year 10K)
+[psycopg-text] server-side prepared (prepare=True): OK [('uno',), ('two',), ('uno',)]
+[psycopg-text] executemany: OK ok
+[psycopg-text] delete by param: OK 1
+[psycopg-text] count: OK ('4',)
+[psycopg-text] error SQLSTATE (dup key): ERR 23505 duplicate key value violates unique constraint "drv_psycopg_text_pkey"
+[psycopg-text] failures=4
+exit=0

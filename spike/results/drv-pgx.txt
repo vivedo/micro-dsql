@@ -1,0 +1,31 @@
+[pgx] version pgx v5.13.0, go1.27.4
+[pgx] connect: OK server_version=16.6-pgwire-0.36.3
+[pgx] drop: OK DROP TABLE
+[pgx] create: OK CREATE TABLE
+[pgx] select 1 (no params): OK 1
+[pgx] insert params bigint+text: ERR client mismatched param and argument count
+[pgx] insert params all types: ERR client mismatched param and argument count
+[pgx] select by param: ERR client expected 0 arguments, got 1
+[pgx] select all types: ERR client expected 0 arguments, got 1
+[pgx] update by param: ERR client mismatched param and argument count
+[pgx] explicit txn commit: ERR client mismatched param and argument count
+[pgx] explicit txn rollback: ERR client can't scan into dest[0] (col: count): cannot scan text (OID 25) in text format into *int64
+[pgx] delete by param: ERR client mismatched param and argument count
+[pgx] count: ERR client can't scan into dest[0] (col: count): cannot scan text (OID 25) in text format into *int64
+[pgx] error SQLSTATE (dup key): OK INSERT 0 1
+[pgx-simple] connect: OK server_version=16.6-pgwire-0.36.3
+[pgx-simple] drop: OK DROP TABLE
+[pgx-simple] create: OK CREATE TABLE
+[pgx-simple] select 1 (no params): OK 1
+[pgx-simple] insert params bigint+text: OK INSERT 0 1
+[pgx-simple] insert params all types: OK INSERT 0 1
+[pgx-simple] select by param: OK one
+[pgx-simple] select all types: ERR client can't scan into dest[1] (col: amount): strconv.ParseInt: parsing "2.50": invalid syntax
+[pgx-simple] update by param: OK UPDATE 1
+[pgx-simple] explicit txn commit: OK
+[pgx-simple] explicit txn rollback: ERR client can't scan into dest[0] (col: count): cannot scan text (OID 25) in text format into *int64
+[pgx-simple] delete by param: OK DELETE 1
+[pgx-simple] count: ERR client can't scan into dest[0] (col: count): cannot scan text (OID 25) in text format into *int64
+[pgx-simple] error SQLSTATE (dup key): ERR 23505 duplicate key value violates unique constraint "drv_pgx_pgx_simple_pkey"
+[pgx] failures=13
+exit=0

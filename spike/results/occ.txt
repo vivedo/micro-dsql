@@ -1,0 +1,148 @@
+[occ] psycopg 3.3.8; step timeout 10.0s
+[S5 isolation levels] - BEGIN -> OK -1
+[S5 isolation levels] - ROLLBACK -> OK -1
+[S5 isolation levels] - BEGIN ISOLATION LEVEL READ UNCOMMITTED -> ERR 0A000 ISOLATION LEVEL READ UNCOMMITTED (Turso transactions are snapshot isolation, i.e. REPEATABLE READ) is not supported
+[S5 isolation levels] - BEGIN ISOLATION LEVEL READ COMMITTED -> ERR 0A000 ISOLATION LEVEL READ COMMITTED (Turso transactions are snapshot isolation, i.e. REPEATABLE READ) is not supported
+[S5 isolation levels] - BEGIN ISOLATION LEVEL REPEATABLE READ -> OK -1
+[S5 isolation levels] - ROLLBACK -> OK -1
+[S5 isolation levels] - BEGIN ISOLATION LEVEL SERIALIZABLE -> ERR 0A000 ISOLATION LEVEL SERIALIZABLE (Turso transactions are snapshot isolation, i.e. REPEATABLE READ) is not supported
+[S5 isolation levels] - BEGIN TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ WRITE -> OK -1
+[S5 isolation levels] - ROLLBACK -> OK -1
+[S5 isolation levels] - BEGIN READ ONLY -> OK -1
+[S5 isolation levels] - ROLLBACK -> OK -1
+[S5 isolation levels] - START TRANSACTION -> OK -1
+[S5 isolation levels] - ROLLBACK -> OK -1
+[S5 isolation levels] - START TRANSACTION ISOLATION LEVEL REPEATABLE READ -> OK -1
+[S5 isolation levels] - ROLLBACK -> OK -1
+[S5 isolation levels] - START TRANSACTION ISOLATION LEVEL SERIALIZABLE -> ERR 0A000 ISOLATION LEVEL SERIALIZABLE (Turso transactions are snapshot isolation, i.e. REPEATABLE READ) is not supported
+[S5 isolation levels] - BEGIN -> OK -1
+[S5 isolation levels] - SET TRANSACTION ISOLATION LEVEL REPEATABLE READ -> OK -1
+[S5 isolation levels] - ROLLBACK -> OK -1
+[S5 isolation levels] - BEGIN -> OK -1
+[S5 isolation levels] - SET TRANSACTION ISOLATION LEVEL READ COMMITTED -> ERR 0A000 ISOLATION LEVEL READ COMMITTED (Turso transactions are snapshot isolation, i.e. REPEATABLE READ) is not supported
+[S5 isolation levels] - ROLLBACK -> OK -1
+[S5 isolation levels] - SET SESSION CHARACTERISTICS AS TRANSACTION ISOLATION LEVEL REPEATABLE READ -> ERR 42601 VARIABLE SET is not supported
+[S5 isolation levels] - SHOW transaction_isolation -> ERR 42601 SHOW transaction_isolation is not supported
+[S5 isolation levels] - SHOW default_transaction_isolation -> ERR 42601 SHOW default_transaction_isolation is not supported
+[S6 error inside a transaction] - BEGIN -> OK -1
+[S6 error inside a transaction] - SELECT 1/0 -> ERR 22012 division by zero
+[S6 error inside a transaction] - SELECT 1 -> ERR 25P02 current transaction is aborted, commands ignored until end of transaction block
+[S6 error inside a transaction] - COMMIT -> OK -1
+[S6 error inside a transaction] - SELECT 'after commit of aborted txn' AS state -> OK [('after commit of aborted txn',)]
+[S1 same-row UPDATE] setup DROP TABLE IF EXISTS occ_acct -> OK -1
+[S1 same-row UPDATE] setup CREATE TABLE occ_acct (id int PRIMARY KEY, balance int NOT NULL) -> OK -1
+[S1 same-row UPDATE] setup INSERT INTO occ_acct VALUES (1, 100), (2, 100) -> OK 2
+[S1 same-row UPDATE] A BEGIN -> OK -1
+[S1 same-row UPDATE] A UPDATE occ_acct SET balance = balance - 10 WHERE id = 1 -> OK 1
+[S1 same-row UPDATE] B BEGIN -> OK -1
+[S1 same-row UPDATE] B UPDATE occ_acct SET balance = balance - 20 WHERE id = 1 -> ERR 40001 Write-write conflict
+[S1 same-row UPDATE] B SELECT balance FROM occ_acct WHERE id = 1 -> ERR 25P02 current transaction is aborted, commands ignored until end of transaction block
+[S1 same-row UPDATE] A COMMIT -> OK -1
+[S1 same-row UPDATE] B COMMIT -> OK -1
+[S1 same-row UPDATE] final SELECT id, balance FROM occ_acct ORDER BY id -> OK [(1, 90), (2, 100)]
+[S1b update after concurrent commit (row committed after B's snapshot)] B BEGIN -> OK -1
+[S1b update after concurrent commit (row committed after B's snapshot)] B SELECT balance FROM occ_acct WHERE id = 1 -> OK [(90,)]
+[S1b update after concurrent commit (row committed after B's snapshot)] A BEGIN -> OK -1
+[S1b update after concurrent commit (row committed after B's snapshot)] A UPDATE occ_acct SET balance = balance - 1 WHERE id = 1 -> OK 1
+[S1b update after concurrent commit (row committed after B's snapshot)] A COMMIT -> OK -1
+[S1b update after concurrent commit (row committed after B's snapshot)] B UPDATE occ_acct SET balance = balance - 2 WHERE id = 1 -> ERR 40001 Write-write conflict
+[S1b update after concurrent commit (row committed after B's snapshot)] B COMMIT -> OK -1
+[S1b update after concurrent commit (row committed after B's snapshot)] final SELECT id, balance FROM occ_acct ORDER BY id -> OK [(1, 89), (2, 100)]
+[S1c different rows (no conflict expected)] A BEGIN -> OK -1
+[S1c different rows (no conflict expected)] B BEGIN -> OK -1
+[S1c different rows (no conflict expected)] A UPDATE occ_acct SET balance = balance + 1 WHERE id = 1 -> OK 1
+[S1c different rows (no conflict expected)] B UPDATE occ_acct SET balance = balance + 1 WHERE id = 2 -> OK 1
+[S1c different rows (no conflict expected)] A COMMIT -> OK -1
+[S1c different rows (no conflict expected)] B COMMIT -> OK -1
+[S1c different rows (no conflict expected)] final SELECT id, balance FROM occ_acct ORDER BY id -> OK [(1, 90), (2, 101)]
+[S1d snapshot point: BEGIN, concurrent autocommit write, then first read] B BEGIN -> OK -1
+[S1d snapshot point: BEGIN, concurrent autocommit write, then first read] A UPDATE occ_acct SET balance = 555 WHERE id = 2 -> OK 1
+[S1d snapshot point: BEGIN, concurrent autocommit write, then first read] B SELECT balance FROM occ_acct WHERE id = 2 -> OK [(555,)]
+[S1d snapshot point: BEGIN, concurrent autocommit write, then first read] B COMMIT -> OK -1
+[S1d snapshot point: BEGIN, concurrent autocommit write, then first read] note: 555 => snapshot taken at first statement; old value => snapshot at BEGIN
+[S1e same-row UPDATE, then the first writer rolls back] A BEGIN -> OK -1
+[S1e same-row UPDATE, then the first writer rolls back] A UPDATE occ_acct SET balance = 0 WHERE id = 1 -> OK 1
+[S1e same-row UPDATE, then the first writer rolls back] B BEGIN -> OK -1
+[S1e same-row UPDATE, then the first writer rolls back] B UPDATE occ_acct SET balance = 1 WHERE id = 1 -> ERR 40001 Write-write conflict
+[S1e same-row UPDATE, then the first writer rolls back] A ROLLBACK -> OK -1
+[S1e same-row UPDATE, then the first writer rolls back] B COMMIT -> OK -1
+[S1e same-row UPDATE, then the first writer rolls back] final SELECT id, balance FROM occ_acct ORDER BY id -> OK [(1, 90), (2, 555)]
+[S2 same-PK INSERT] setup DROP TABLE IF EXISTS occ_pk -> OK -1
+[S2 same-PK INSERT] setup CREATE TABLE occ_pk (id int PRIMARY KEY, who text) -> OK -1
+[S2 same-PK INSERT] A BEGIN -> OK -1
+[S2 same-PK INSERT] A INSERT INTO occ_pk VALUES (10, 'A') -> OK 1
+[S2 same-PK INSERT] B BEGIN -> OK -1
+[S2 same-PK INSERT] B INSERT INTO occ_pk VALUES (10, 'B') -> OK 1
+[S2 same-PK INSERT] A COMMIT -> OK -1
+[S2 same-PK INSERT] B COMMIT -> ERR 40001 Write-write conflict
+[S2 same-PK INSERT] final SELECT * FROM occ_pk ORDER BY id -> OK [(10, 'A')]
+[S2b same-PK INSERT, second inserter commits first] A BEGIN -> OK -1
+[S2b same-PK INSERT, second inserter commits first] A INSERT INTO occ_pk VALUES (20, 'A') -> OK 1
+[S2b same-PK INSERT, second inserter commits first] B BEGIN -> OK -1
+[S2b same-PK INSERT, second inserter commits first] B INSERT INTO occ_pk VALUES (20, 'B') -> OK 1
+[S2b same-PK INSERT, second inserter commits first] B COMMIT -> OK -1
+[S2b same-PK INSERT, second inserter commits first] A COMMIT -> ERR 40001 Write-write conflict
+[S2b same-PK INSERT, second inserter commits first] final SELECT * FROM occ_pk ORDER BY id -> OK [(10, 'A'), (20, 'B')]
+[S2c same unique (non-PK) key INSERT] setup DROP TABLE IF EXISTS occ_uq -> OK -1
+[S2c same unique (non-PK) key INSERT] setup CREATE TABLE occ_uq (id int PRIMARY KEY, email text UNIQUE) -> OK -1
+[S2c same unique (non-PK) key INSERT] A BEGIN -> OK -1
+[S2c same unique (non-PK) key INSERT] A INSERT INTO occ_uq VALUES (1, 'x@example.com') -> OK 1
+[S2c same unique (non-PK) key INSERT] B BEGIN -> OK -1
+[S2c same unique (non-PK) key INSERT] B INSERT INTO occ_uq VALUES (2, 'x@example.com') -> OK 1
+[S2c same unique (non-PK) key INSERT] A COMMIT -> OK -1
+[S2c same unique (non-PK) key INSERT] B COMMIT -> ERR 40001 Write-write conflict
+[S2c same unique (non-PK) key INSERT] final SELECT * FROM occ_uq ORDER BY id -> OK [(1, 'x@example.com')]
+[S3 write skew] setup DROP TABLE IF EXISTS occ_oncall -> OK -1
+[S3 write skew] setup CREATE TABLE occ_oncall (doctor text PRIMARY KEY, on_call bool NOT NULL) -> OK -1
+[S3 write skew] setup INSERT INTO occ_oncall VALUES ('alice', true), ('bob', true) -> OK 2
+[S3 write skew] A BEGIN -> OK -1
+[S3 write skew] A SELECT count(*) FROM occ_oncall WHERE on_call -> OK [('2',)]
+[S3 write skew] B BEGIN -> OK -1
+[S3 write skew] B SELECT count(*) FROM occ_oncall WHERE on_call -> OK [('2',)]
+[S3 write skew] A UPDATE occ_oncall SET on_call = false WHERE doctor = 'alice' -> OK 1
+[S3 write skew] B UPDATE occ_oncall SET on_call = false WHERE doctor = 'bob' -> OK 1
+[S3 write skew] A COMMIT -> OK -1
+[S3 write skew] B COMMIT -> OK -1
+[S3 write skew] final SELECT * FROM occ_oncall ORDER BY doctor -> OK [('alice', False), ('bob', False)]
+[S3 write skew] note: both on_call=false => write skew allowed (snapshot isolation, same as DSQL)
+[S4 concurrent writes (autocommit, 8 workers x 150 ops)] setup DROP TABLE IF EXISTS occ_log -> OK -1
+[S4 concurrent writes (autocommit, 8 workers x 150 ops)] setup CREATE TABLE occ_log (id int PRIMARY KEY, worker int NOT NULL) -> OK -1
+[S4 concurrent writes (autocommit, 8 workers x 150 ops)] setup DROP TABLE IF EXISTS occ_ctr -> OK -1
+[S4 concurrent writes (autocommit, 8 workers x 150 ops)] setup CREATE TABLE occ_ctr (id int PRIMARY KEY, n int NOT NULL) -> OK -1
+[S4 concurrent writes (autocommit, 8 workers x 150 ops)] setup INSERT INTO occ_ctr VALUES (1, 0) -> OK 1
+[S4 concurrent writes (autocommit, 8 workers x 150 ops)] elapsed 0.16s, threads still running: 0
+[S4 concurrent writes (autocommit, 8 workers x 150 ops)] successful inserts=1153 successful bumps=1152 attempted=1200 each
+[S4 concurrent writes (autocommit, 8 workers x 150 ops)] errors bump 55P03: 48  e.g. Database is busy
+[S4 concurrent writes (autocommit, 8 workers x 150 ops)] errors insert 55P03: 47  e.g. Database is busy
+[S4 concurrent writes (autocommit, 8 workers x 150 ops)] check SELECT count(*) FROM occ_log -> OK [('1153',)]
+[S4 concurrent writes (autocommit, 8 workers x 150 ops)] check SELECT n FROM occ_ctr WHERE id = 1 -> OK [(1152,)]
+[S4 concurrent writes (autocommit, 8 workers x 150 ops)] consistency (rows == successful inserts, counter == successful bumps): OK
+[S4 concurrent writes (explicit BEGIN/COMMIT, 8 workers x 150 ops)] setup DROP TABLE IF EXISTS occ_log_tx -> OK -1
+[S4 concurrent writes (explicit BEGIN/COMMIT, 8 workers x 150 ops)] setup CREATE TABLE occ_log_tx (id int PRIMARY KEY, worker int NOT NULL) -> OK -1
+[S4 concurrent writes (explicit BEGIN/COMMIT, 8 workers x 150 ops)] setup DROP TABLE IF EXISTS occ_ctr_tx -> OK -1
+[S4 concurrent writes (explicit BEGIN/COMMIT, 8 workers x 150 ops)] setup CREATE TABLE occ_ctr_tx (id int PRIMARY KEY, n int NOT NULL) -> OK -1
+[S4 concurrent writes (explicit BEGIN/COMMIT, 8 workers x 150 ops)] setup INSERT INTO occ_ctr_tx VALUES (1, 0) -> OK 1
+[S4 concurrent writes (explicit BEGIN/COMMIT, 8 workers x 150 ops)] elapsed 0.28s, threads still running: 0
+[S4 concurrent writes (explicit BEGIN/COMMIT, 8 workers x 150 ops)] successful inserts=1200 successful bumps=792 attempted=1200 each
+[S4 concurrent writes (explicit BEGIN/COMMIT, 8 workers x 150 ops)] errors bump 40001: 408  e.g. Write-write conflict
+[S4 concurrent writes (explicit BEGIN/COMMIT, 8 workers x 150 ops)] check SELECT count(*) FROM occ_log_tx -> OK [('1200',)]
+[S4 concurrent writes (explicit BEGIN/COMMIT, 8 workers x 150 ops)] check SELECT n FROM occ_ctr_tx WHERE id = 1 -> OK [(792,)]
+[S4 concurrent writes (explicit BEGIN/COMMIT, 8 workers x 150 ops)] consistency (rows == successful inserts, counter == successful bumps): OK
+[S7 DDL vs concurrent transaction] setup DROP TABLE IF EXISTS occ_ddl -> OK -1
+[S7 DDL vs concurrent transaction] setup CREATE TABLE occ_ddl (id int PRIMARY KEY, v int) -> OK -1
+[S7 DDL vs concurrent transaction] setup INSERT INTO occ_ddl VALUES (1, 1) -> OK 1
+[S7 DDL vs concurrent transaction] A BEGIN -> OK -1
+[S7 DDL vs concurrent transaction] A SELECT v FROM occ_ddl WHERE id = 1 -> OK [(1,)]
+[S7 DDL vs concurrent transaction] B ALTER TABLE occ_ddl ADD COLUMN w int -> OK -1
+[S7 DDL vs concurrent transaction] A INSERT INTO occ_ddl (id, v) VALUES (2, 2) -> OK 1
+[S7 DDL vs concurrent transaction] A COMMIT -> ERR 40001 Database schema conflict
+[S7 DDL vs concurrent transaction] A2 BEGIN -> OK -1
+[S7 DDL vs concurrent transaction] A2 UPDATE occ_ddl SET v = 10 WHERE id = 1 -> OK 1
+[S7 DDL vs concurrent transaction] B2 BEGIN -> OK -1
+[S7 DDL vs concurrent transaction] B2 CREATE TABLE occ_ddl2 (id int PRIMARY KEY) -> OK -1
+[S7 DDL vs concurrent transaction] B2 COMMIT -> OK -1
+[S7 DDL vs concurrent transaction] A2 COMMIT -> ERR 40001 Database schema conflict
+[S7 DDL vs concurrent transaction] final SELECT * FROM occ_ddl ORDER BY id -> OK [(1, 1, None)]
+[occ] server still alive at the end: yes
+[occ] any hang: no
+exit=0
