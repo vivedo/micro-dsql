@@ -6,6 +6,7 @@ use crate::classify::{classify, StatementClass};
 use crate::errors::PolicyError;
 use crate::intercept::{intercept_node, Intercept};
 use crate::rewrite::{apply_edits, ast_rewrites, pre_parse};
+use crate::rules::check_rules;
 
 /// The result of running the policy pipeline on one statement text (contracts/policy-api.md §2).
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -51,6 +52,7 @@ impl StatementPlan {
         Self {
             engine_sql: apply_edits(&text, &edits).into_owned(),
             class: classify(node),
+            refusal: check_rules(node, &text),
             intercept: intercept_node(node),
             values_rows: values_rows(node),
             ..plan(String::new(), false)
@@ -120,6 +122,13 @@ mod tests {
             StatementPlan::new("SHOW server_version").intercept,
             Some(Intercept::Show { .. })
         ));
+    }
+
+    #[test]
+    fn refusals_are_recorded_in_the_plan() {
+        let plan = StatementPlan::new("TRUNCATE t");
+        assert_eq!(plan.refusal.as_ref().map(|e| e.rule), Some("truncate"));
+        assert_eq!(StatementPlan::new("SELECT 1").refusal, None);
     }
 
     #[test]

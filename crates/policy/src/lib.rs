@@ -20,9 +20,11 @@ pub mod errors;
 pub mod intercept;
 pub mod params;
 pub mod rewrite;
+pub mod rules;
 pub mod server_params;
 pub mod session;
 pub mod statement;
+pub mod types;
 
 pub use classify::{classify, StatementClass, TxnControl};
 pub use errors::{
