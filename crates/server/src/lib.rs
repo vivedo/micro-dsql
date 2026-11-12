@@ -125,14 +125,25 @@ pub fn open_database(storage: &Storage) -> anyhow::Result<Arc<Database>> {
         .with_attach(true);
     let db = match storage {
         // Turso names the database after the path's file stem (`current_database()`,
-        // `pg_database`), so an in-memory database opened on a memory IO under the path
-        // `postgres` is called `postgres`, as on DSQL.
-        Storage::Memory => turso_pg::open_database_with_io(
-            Arc::new(turso_core::MemoryIO::new()),
-            DATABASE_NAME,
-            OpenFlags::default(),
-            opts,
-        )?,
+        // `pg_database`), so an in-memory database opened on a memory IO under a path
+        // ending in `/postgres` is called `postgres`, as on DSQL. Nothing touches the
+        // file system. The directory part is unique per database because Turso keeps a
+        // process-wide registry keyed by path: two servers in one process (tests) must
+        // not share or contend for one database.
+        Storage::Memory => {
+            static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+            let n = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            let path = format!(
+                "micro-dsql-memory-{}-{n}/{DATABASE_NAME}",
+                std::process::id()
+            );
+            turso_pg::open_database_with_io(
+                Arc::new(turso_core::MemoryIO::new()),
+                &path,
+                OpenFlags::default(),
+                opts,
+            )?
+        }
         Storage::File(path) => {
             let path = path
                 .to_str()
@@ -1252,8 +1263,9 @@ fn sqlite_type_to_pg_type(type_str: &str) -> Type {
         "INTEGER" | "INT" | "INT4" | "SERIAL" => Type::INT4,
         "SMALLINT" | "INT2" | "SMALLSERIAL" => Type::INT2,
         "BIGINT" | "INT8" | "BIGSERIAL" => Type::INT8,
-        "REAL" | "FLOAT4" => Type::FLOAT4,
-        "FLOAT" | "FLOAT8" | "DOUBLE" | "DOUBLE PRECISION" => Type::FLOAT8,
+        // The translator stores float8 columns as REAL, so REAL stays float8 (upstream).
+        "FLOAT4" => Type::FLOAT4,
+        "REAL" | "FLOAT" | "FLOAT8" | "DOUBLE" | "DOUBLE PRECISION" => Type::FLOAT8,
         "NUMERIC" | "DECIMAL" => Type::NUMERIC,
         "TEXT" | "CHARACTER VARYING" | "NAME" => Type::TEXT,
         "VARCHAR" => Type::VARCHAR,

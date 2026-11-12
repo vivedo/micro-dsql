@@ -1535,6 +1535,7 @@ dependencies = [
  "clap",
  "micro-dsql-server",
  "tokio",
+ "tokio-postgres",
  "tracing",
  "tracing-subscriber",
 ]
@@ -1562,6 +1563,7 @@ dependencies = [
  "turso_core",
  "turso_pg",
  "turso_pg_parser",
+ "uuid",
 ]
 
 [[package]]
@@ -1905,6 +1907,7 @@ dependencies = [
  "postgres-protocol",
  "serde",
  "serde_json",
+ "uuid",
 ]
 
 [[package]]

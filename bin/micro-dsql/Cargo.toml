@@ -16,3 +16,10 @@ tokio.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
 micro-dsql-server.workspace = true
+
+[dev-dependencies]
+tokio-postgres.workspace = true
+
+[[test]]
+name = "cli"
+path = "../../tests/smoke/cli.rs"
