@@ -1,0 +1,25 @@
+[package]
+name = "micro-dsql"
+description = "Local Aurora DSQL database emulator for tests and CI"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+[[bin]]
+name = "micro-dsql"
+path = "src/main.rs"
+
+[dependencies]
+anyhow.workspace = true
+clap.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+micro-dsql-server.workspace = true
+
+[dev-dependencies]
+tokio-postgres.workspace = true
+
+[[test]]
+name = "cli"
+path = "../../tests/smoke/cli.rs"
