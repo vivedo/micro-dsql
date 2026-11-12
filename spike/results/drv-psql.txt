@@ -1,4 +1,5 @@
 psql (PostgreSQL) 18.6
+[psql] connect: OK
 DROP TABLE IF EXISTS drv_psql;
 DROP TABLE
 CREATE TABLE drv_psql (id bigint PRIMARY KEY, name text NOT NULL, n int, amount numeric(10,2), ok bool, at timestamptz, u uuid);

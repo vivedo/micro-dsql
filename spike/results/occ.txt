@@ -110,12 +110,12 @@
 [S4 concurrent writes (autocommit, 8 workers x 150 ops)] setup DROP TABLE IF EXISTS occ_ctr -> OK -1
 [S4 concurrent writes (autocommit, 8 workers x 150 ops)] setup CREATE TABLE occ_ctr (id int PRIMARY KEY, n int NOT NULL) -> OK -1
 [S4 concurrent writes (autocommit, 8 workers x 150 ops)] setup INSERT INTO occ_ctr VALUES (1, 0) -> OK 1
-[S4 concurrent writes (autocommit, 8 workers x 150 ops)] elapsed 0.16s, threads still running: 0
-[S4 concurrent writes (autocommit, 8 workers x 150 ops)] successful inserts=1153 successful bumps=1152 attempted=1200 each
-[S4 concurrent writes (autocommit, 8 workers x 150 ops)] errors bump 55P03: 48  e.g. Database is busy
-[S4 concurrent writes (autocommit, 8 workers x 150 ops)] errors insert 55P03: 47  e.g. Database is busy
-[S4 concurrent writes (autocommit, 8 workers x 150 ops)] check SELECT count(*) FROM occ_log -> OK [('1153',)]
-[S4 concurrent writes (autocommit, 8 workers x 150 ops)] check SELECT n FROM occ_ctr WHERE id = 1 -> OK [(1152,)]
+[S4 concurrent writes (autocommit, 8 workers x 150 ops)] elapsed 0.15s, threads still running: 0
+[S4 concurrent writes (autocommit, 8 workers x 150 ops)] successful inserts=1159 successful bumps=1150 attempted=1200 each
+[S4 concurrent writes (autocommit, 8 workers x 150 ops)] errors bump 55P03: 50  e.g. Database is busy
+[S4 concurrent writes (autocommit, 8 workers x 150 ops)] errors insert 55P03: 41  e.g. Database is busy
+[S4 concurrent writes (autocommit, 8 workers x 150 ops)] check SELECT count(*) FROM occ_log -> OK [('1159',)]
+[S4 concurrent writes (autocommit, 8 workers x 150 ops)] check SELECT n FROM occ_ctr WHERE id = 1 -> OK [(1150,)]
 [S4 concurrent writes (autocommit, 8 workers x 150 ops)] consistency (rows == successful inserts, counter == successful bumps): OK
 [S4 concurrent writes (explicit BEGIN/COMMIT, 8 workers x 150 ops)] setup DROP TABLE IF EXISTS occ_log_tx -> OK -1
 [S4 concurrent writes (explicit BEGIN/COMMIT, 8 workers x 150 ops)] setup CREATE TABLE occ_log_tx (id int PRIMARY KEY, worker int NOT NULL) -> OK -1
@@ -123,10 +123,10 @@
 [S4 concurrent writes (explicit BEGIN/COMMIT, 8 workers x 150 ops)] setup CREATE TABLE occ_ctr_tx (id int PRIMARY KEY, n int NOT NULL) -> OK -1
 [S4 concurrent writes (explicit BEGIN/COMMIT, 8 workers x 150 ops)] setup INSERT INTO occ_ctr_tx VALUES (1, 0) -> OK 1
 [S4 concurrent writes (explicit BEGIN/COMMIT, 8 workers x 150 ops)] elapsed 0.28s, threads still running: 0
-[S4 concurrent writes (explicit BEGIN/COMMIT, 8 workers x 150 ops)] successful inserts=1200 successful bumps=792 attempted=1200 each
-[S4 concurrent writes (explicit BEGIN/COMMIT, 8 workers x 150 ops)] errors bump 40001: 408  e.g. Write-write conflict
+[S4 concurrent writes (explicit BEGIN/COMMIT, 8 workers x 150 ops)] successful inserts=1200 successful bumps=796 attempted=1200 each
+[S4 concurrent writes (explicit BEGIN/COMMIT, 8 workers x 150 ops)] errors bump 40001: 404  e.g. Write-write conflict
 [S4 concurrent writes (explicit BEGIN/COMMIT, 8 workers x 150 ops)] check SELECT count(*) FROM occ_log_tx -> OK [('1200',)]
-[S4 concurrent writes (explicit BEGIN/COMMIT, 8 workers x 150 ops)] check SELECT n FROM occ_ctr_tx WHERE id = 1 -> OK [(792,)]
+[S4 concurrent writes (explicit BEGIN/COMMIT, 8 workers x 150 ops)] check SELECT n FROM occ_ctr_tx WHERE id = 1 -> OK [(796,)]
 [S4 concurrent writes (explicit BEGIN/COMMIT, 8 workers x 150 ops)] consistency (rows == successful inserts, counter == successful bumps): OK
 [S7 DDL vs concurrent transaction] setup DROP TABLE IF EXISTS occ_ddl -> OK -1
 [S7 DDL vs concurrent transaction] setup CREATE TABLE occ_ddl (id int PRIMARY KEY, v int) -> OK -1

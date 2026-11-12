@@ -4,6 +4,7 @@
 set -u
 here="$(dirname "$0")"
 . "$here/../env.sh"
+"$PSQL" -X -At -c "SELECT 1" >/dev/null || { echo "cannot connect to $PGHOST:$PGPORT"; exit 1; }
 for f in schema.sql queries.sql probes.sql; do
   echo "=================== $f"
   (cd "$here" && "$PSQL" -X -e -v ON_ERROR_STOP=0 -v VERBOSITY=verbose -f "$f" 2>&1)

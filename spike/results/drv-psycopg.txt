@@ -16,7 +16,7 @@
 [psycopg] executemany: ERR XX000 invalid integer parameter: invalid digit found in string
 [psycopg] delete by param: ERR XX000 invalid integer parameter: invalid digit found in string
 [psycopg] count: OK ('0',)
-[psycopg] error SQLSTATE (dup key): OK <psycopg.Cursor [COMMAND_OK] [IDLE] (host=127.0.0.1 user=admin database=postgres) at 0x10797c7d0>
+[psycopg] error SQLSTATE (dup key): OK <psycopg.Cursor [COMMAND_OK] [IDLE] (host=127.0.0.1 user=admin database=postgres) at 0x10ad987d0>
 [psycopg] failures=13
 [psycopg-text] drop: OK
 [psycopg-text] create: OK

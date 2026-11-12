@@ -17,6 +17,7 @@ import (
 )
 
 var failures int
+var connectFailed bool
 
 func step(name, label string, fn func(ctx context.Context) (any, error)) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -52,6 +53,7 @@ func run(name string, mode pgx.QueryExecMode) {
 	if err != nil {
 		fmt.Printf("[%s] connect: ERR %v\n", name, err)
 		failures++
+		connectFailed = true
 		return
 	}
 	defer conn.Close(ctx)
@@ -139,4 +141,7 @@ func main() {
 	run("pgx", pgx.QueryExecModeCacheStatement)
 	run("pgx-simple", pgx.QueryExecModeSimpleProtocol)
 	fmt.Printf("[pgx] failures=%d\n", failures)
+	if connectFailed {
+		os.Exit(1)
+	}
 }

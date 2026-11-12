@@ -3,6 +3,8 @@
 set -u
 . "$(dirname "$0")/../env.sh"
 "$PSQL" --version
+"$PSQL" -X -At -c "SELECT 1" >/dev/null || { echo "[psql] connect: ERR cannot connect to $PGHOST:$PGPORT"; exit 1; }
+echo "[psql] connect: OK"
 "$PSQL" -X -e -v ON_ERROR_STOP=0 -v VERBOSITY=verbose <<'SQL'
 \set VERBOSITY verbose
 DROP TABLE IF EXISTS drv_psql;
