@@ -106,7 +106,7 @@ an orphan insert fails `23503`; VALIDATE's job fails while an old orphan exists.
 - [X] T036 [US3] Implement the ADD CONSTRAINT rules in crates/policy/src/ddl_rules.rs with constructors in crates/policy/src/errors.rs; `AddConstraintNotValid`/`Validate` extraction in crates/policy/src/jobs.rs (plans with these actions send no engine text)
 - [ ] T037 [US3] Implement `constraints::add_not_valid` in crates/server/src/constraints.rs per the T032 result (column definition read from the engine schema, constraint name kept) and dispatch it from crates/server/src/ddl.rs
 - [X] T038 [US3] Implement `constraints::validate` in crates/server/src/constraints.rs (read the constraint from the catalog per T032; FK: child rows with non-null keys and no parent; CHECK: rows where the expression is false; PostgreSQL-style detail text for a failed job) and the `Validate` branch of `sys::run_job_statement` in crates/server/src/sys.rs (tag `ALTER TABLE` + `job_id`)
-- [ ] T039 [US3] If `pg_constraint.convalidated` cannot express NOT VALID (T032 e), record it in docs/known-gaps.md; otherwise add an integration assertion `convalidated = f` before and `t` after a successful VALIDATE in crates/server/tests/smoke/dsql_ddl.rs (FR-022)
+- [X] T039 [US3] If `pg_constraint.convalidated` cannot express NOT VALID (T032 e), record it in docs/known-gaps.md; otherwise add an integration assertion `convalidated = f` before and `t` after a successful VALIDATE in crates/server/tests/smoke/dsql_ddl.rs (FR-022)
 
 **Checkpoint**: US3 complete; Drizzle's foreign keys in DSQL form run.
 
@@ -167,8 +167,8 @@ with constraint not supported`; the column does not exist.
 - [X] T062 Check the policy crate still depends only on `pg_query` (`cargo tree -p micro-dsql-policy --depth 1`) and that no `turso_*` type appears in crates/policy (Principle III)
 - [X] T063 Grep committed changes for machine-specific paths, user names and tool attribution (`git diff main --stat` plus a grep for absolute home/mount paths); fix any
 - [ ] T064 Full gates: `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings`, `cargo test --workspace`, `tests/psql/run.sh` (layer 1, scenarios pass=5) against a fresh server on a free port
-- [ ] T065 Probes report: `tests/psql/run.sh --probes` with `RESULTS_DIR=reports/m3`; SC-003 holds for 04, 22, 27, 28; no previously matching probe line regresses relative to T001
-- [ ] T066 Re-run scripts/drizzle-check.sh and scripts/conformance.sh after the final gates (SC-001, SC-002) and record the totals in specs/006-m3-orm-ddl/research.md
+- [X] T065 Probes report: `tests/psql/run.sh --probes` with `RESULTS_DIR=reports/m3`; SC-003 holds for 04, 22, 27, 28; no previously matching probe line regresses relative to T001
+- [X] T066 Re-run scripts/drizzle-check.sh and scripts/conformance.sh after the final gates (SC-001, SC-002) and record the totals in specs/006-m3-orm-ddl/research.md
 - [ ] T067 [orchestrator] Differential run against MiniStack (`scripts/compare.sh`, Docker; exclusive resource) for probes 04, 05, 22, 27, 28 and the new behaviours; attach the report to the merge notes
 - [ ] T068 [orchestrator] Coordinate merge order with feature 007 (shared files listed in plan.md "Seams with 007": `session.rs`, `statement.rs`, `rules.rs`, `errors.rs`, `dsql.rs`, `lib.rs`, docs); resolve conflicts keeping 007's autocommit/transaction changes and 006's dispatch branch and `Reply::Rows`; consolidate the probe-deviation notes from T025, T031, T043
 - [ ] T069 [owner] Manual walkthrough of quickstart.md §5 against a running micro-dsql (psql), and of the Drizzle example README
