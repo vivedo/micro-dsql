@@ -438,3 +438,71 @@ async fn autocommit_ddl_with_server_steps_under_contention() {
     // The check constraint was not added: a negative value is accepted.
     b.ok("UPDATE child SET v = -1 WHERE id = 1").await;
 }
+
+/// SC-005: the retry loop DSQL clients write (BEGIN, read, write, COMMIT, retry on 40001) over
+/// one hot row converges: 4 sessions x 50 increments give exactly 200, and nothing but
+/// `40001` is ever reported.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn retry_loop_increments_converge() {
+    let server = Arc::new(TestServer::start());
+    let setup = Session::new(&server).await;
+    setup
+        .ok("CREATE TABLE counter (id int PRIMARY KEY, v int)")
+        .await;
+    setup.ok("INSERT INTO counter VALUES (1, 0)").await;
+    let mut tasks = Vec::new();
+    for _ in 0..4 {
+        let server = server.clone();
+        tasks.push(tokio::spawn(async move {
+            let s = Session::new(&server).await;
+            let mut retries = 0u32;
+            for _ in 0..50 {
+                loop {
+                    let attempt = async {
+                        s.try_ok("BEGIN").await?;
+                        s.try_ok("SELECT v FROM counter WHERE id = 1").await?;
+                        s.try_ok("UPDATE counter SET v = v + 1 WHERE id = 1")
+                            .await?;
+                        s.try_ok("COMMIT").await
+                    }
+                    .await;
+                    match attempt {
+                        Ok(()) => break,
+                        Err(e) => {
+                            assert_eq!(e.code, "40001", "{e:?}");
+                            // A failure at a statement leaves an aborted block behind.
+                            let _ = s.client.simple_query("ROLLBACK").await;
+                            retries += 1;
+                            assert!(retries < 5000, "no progress");
+                        }
+                    }
+                }
+            }
+        }));
+    }
+    for task in tasks {
+        task.await.unwrap();
+    }
+    assert_eq!(
+        setup
+            .value("SELECT v FROM counter WHERE id = 1")
+            .await
+            .as_deref(),
+        Some("200")
+    );
+}
+
+/// SC-006 (run by hand: `cargo test -p micro-dsql-server --test occ autocommit_latency --
+/// --ignored --nocapture`): 1,000 single-session autocommit INSERTs.
+#[tokio::test]
+#[ignore = "timing; run manually"]
+async fn autocommit_latency() {
+    let server = TestServer::start();
+    let s = Session::new(&server).await;
+    s.ok("CREATE TABLE lat (id int PRIMARY KEY, v int)").await;
+    let started = std::time::Instant::now();
+    for i in 0..1000 {
+        s.ok(&format!("INSERT INTO lat VALUES ({i}, 0)")).await;
+    }
+    println!("1000 autocommit INSERTs: {:?}", started.elapsed());
+}

@@ -54,13 +54,14 @@ SQLSTATEs on errors, and DSQL's only isolation level (`REPEATABLE READ`).
 
 Code that would break on DSQL breaks here, with DSQL's SQLSTATE and message:
 
-- **Conflicts**: a write conflict is `40001` `change conflicts with another transaction (OC000)`
-  (also when the engine reports lock contention, `55P03`); a concurrent schema change is `40001`
-  `schema has been updated by another transaction (OC001)`.
+- **Conflicts** (optimistic concurrency, see below): a write conflict is `40001` `change
+  conflicts with another transaction (OC000)`; a concurrent schema change is `40001` `schema has
+  been updated by another transaction (OC001)`. `55P03` never reaches a client.
 - **Transactions**: one DDL statement per transaction, no DDL and DML in the same transaction,
-  no savepoints, at most 3,000 changed rows and 300 s per transaction (`54000`). A query string
-  with several statements is checked as one implicit transaction. A refusal inside a
-  transaction aborts it (`25P02` until `ROLLBACK`).
+  no savepoints, at most 3,000 changed rows and 300 s per transaction (`54000`), also for a single
+  autocommit statement. A query string with several statements runs as one implicit transaction
+  (all or nothing) and is checked against the same rules. A refusal inside a transaction aborts it
+  (`25P02` until `ROLLBACK`).
 - **Statements DSQL does not have** are refused with `0A000` (`TRUNCATE`, `CREATE TYPE`,
   `CREATE TEMP TABLE`, `COPY`, `serial`, arrays, `inet`, `money`, triggers, extensions, `LOCK`,
   ...).
@@ -82,7 +83,33 @@ Code that would break on DSQL breaks here, with DSQL's SQLSTATE and message:
   `42809` (it is a procedure), `SELECT * FROM sys.dsql_major_version()` returns `1`, and `sys` is
   read-only for clients.
 
-Raise the log level to `debug` to see one line per refused statement with the rule id.
+Raise the log level to `debug` to see one line per refused statement with the rule id (and the
+`deferred conflict`, `busy retry`, `residual contention` and `snapshot re-opened for DDL` lines of
+the OCC emulation).
+
+### Concurrency (OCC)
+
+Like DSQL, micro-dsql never blocks on a lock: concurrent transactions run side by side and a
+conflict fails one of them with `40001`.
+
+- **Autocommit statements** are single-statement transactions: concurrent inserts of different
+  rows never fail, two updates of one row fail the later one with OC000.
+- **Conflicts are reported at `COMMIT`.** Inside a transaction a conflicting write is answered without an error (possibly with no rows) as if
+  it had worked, and the transaction's `COMMIT` fails with OC000 (it rolls back). Code written for
+  DSQL's retry loop therefore works unchanged.
+- **The snapshot is taken at `BEGIN`**: a transaction does not see rows committed after its
+  `BEGIN`, whatever its first statement is.
+- **`SELECT ... FOR UPDATE`** on a single table puts its rows into the write set: a concurrent
+  write of one of them conflicts. `FOR KEY SHARE` is accepted and conflicts with nothing.
+- **Retry on `40001`** (both OC000 and OC001), re-running the whole transaction, as you would
+  against DSQL. Expect `40001` more often than on DSQL while DDL runs concurrently (a DDL
+  transaction conflicts with every writer, not just those of its table), so create schema before
+  starting parallel workers, or retry.
+
+The remaining differences (the later writer, not the later committer, loses; foreign keys and
+`FOR KEY SHARE` take no key share; `NOWAIT`/`SKIP LOCKED` are no-ops; ...) are listed in
+[docs/known-gaps.md](docs/known-gaps.md) under `OCC:`; each has a scenario in
+[tests/occ/](tests/occ/README.md).
 
 ## Development
 
@@ -92,7 +119,7 @@ Needs Rust (stable) and clang/libclang (Xcode command line tools on macOS,
 ```sh
 cargo fmt --check
 cargo clippy --all-targets -- -D warnings
-cargo test --workspace
+cargo test --workspace   # includes the OCC suite, tests/occ
 PGHOST=127.0.0.1 PGPORT=5432 PGPASSWORD=x tests/psql/run.sh   # against a running micro-dsql
 ```
 
@@ -118,6 +145,7 @@ crates/
   micro-dsql/   the binary: CLI flags, logging, signal handling (tests/: CLI tests)
   server/       Postgres wire server, adapted from Turso's postgres/server/lib.rs (tests/: integration tests)
   policy/       DSQL rules on the pg_query AST, engine-agnostic
+tests/occ/      two-session OCC scenarios: the conflict matrix and its documented differences (see its README)
 tests/psql/     target-agnostic psql scenarios and DSQL-rule probes (see its README)
 tests/orm/      Drizzle example project (migrations in DSQL form, runners, smoke)
 scripts/        MiniStack reference setup and differential comparison, drizzle-check.sh, conformance.sh

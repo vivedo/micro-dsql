@@ -42,14 +42,19 @@
 // - parameter decoding errors use PostgreSQL SQLSTATEs (22P02/22P03) instead of XX000;
 // - DSQL policy layer (M2): every statement runs through `dsql::run_planned` (rules,
 //   transaction discipline and limits, SET whitelist, DDL rewrites from the `micro-dsql-policy`
-//   crate); engine conflicts and lock contention are sent as DSQL's 40001 OC000/OC001 errors
-//   (`55P03` is mapped to OC000 until autocommit runs as a transaction); errors raised by the
-//   policy carry their own SQLSTATE, message and DETAIL;
+//   crate); engine conflicts are sent as DSQL's 40001 OC000/OC001 errors; errors raised by
+//   the policy carry their own SQLSTATE, message and DETAIL;
 // - M3 (DDL for ORMs): DSQL's `ASYNC` keyword is blanked before the syntax check and the
 //   parameter analysis, job statements (`CREATE INDEX ASYNC`, `CALL sys.wait_for_job`, ...)
 //   are answered through `sys.jobs` by `sys.rs`, DDL with prelude statements, cleanup or
 //   constraint work runs through `ddl.rs`; `Outcome::TaggedRows` and `reply_rows` carry the
 //   typed rows of those answers; `open_database` creates `sys.jobs`;
+// - M4 (OCC fidelity, `occ.rs`): autocommit DML and `SELECT ... FOR UPDATE` run as
+//   single-statement transactions (bounded retry of engine lock contention, the 3,000-row limit
+//   before `COMMIT`), idle multi-statement strings run as one implicit transaction, a write
+//   conflict in an explicit transaction is deferred to `COMMIT` (OC000), the snapshot is pinned
+//   at `BEGIN`, and lock contention that outlives the retries is `40001` OC001 (`55P03` never
+//   reaches a client); `ServerOptions::occ` switches the shims;
 // - the upstream unit tests (which need Turso's internal test client) are not carried
 //   over; crates/server/tests/smoke covers the behaviour.
 
