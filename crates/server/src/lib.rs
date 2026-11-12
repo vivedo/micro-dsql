@@ -42,14 +42,19 @@
 // - parameter decoding errors use PostgreSQL SQLSTATEs (22P02/22P03) instead of XX000;
 // - DSQL policy layer (M2): every statement runs through `dsql::run_planned` (rules,
 //   transaction discipline and limits, SET whitelist, DDL rewrites from the `micro-dsql-policy`
-//   crate); engine conflicts and lock contention are sent as DSQL's 40001 OC000/OC001 errors
-//   (`55P03` is mapped to OC000 until autocommit runs as a transaction); errors raised by the
-//   policy carry their own SQLSTATE, message and DETAIL;
+//   crate); engine conflicts are sent as DSQL's 40001 OC000/OC001 errors; errors raised by
+//   the policy carry their own SQLSTATE, message and DETAIL;
 // - M3 (DDL for ORMs): DSQL's `ASYNC` keyword is blanked before the syntax check and the
 //   parameter analysis, job statements (`CREATE INDEX ASYNC`, `CALL sys.wait_for_job`, ...)
 //   are answered through `sys.jobs` by `sys.rs`, DDL with prelude statements, cleanup or
 //   constraint work runs through `ddl.rs`; `Outcome::TaggedRows` and `reply_rows` carry the
 //   typed rows of those answers; `open_database` creates `sys.jobs`;
+// - M4 (OCC fidelity, `occ.rs`): autocommit DML and `SELECT ... FOR UPDATE` run as
+//   single-statement transactions (bounded retry of engine lock contention, the 3,000-row limit
+//   before `COMMIT`), idle multi-statement strings run as one implicit transaction, a write
+//   conflict in an explicit transaction is deferred to `COMMIT` (OC000), the snapshot is pinned
+//   at `BEGIN`, and lock contention that outlives the retries is `40001` OC001 (`55P03` never
+//   reaches a client); `ServerOptions::occ` switches the shims;
 // - the upstream unit tests (which need Turso's internal test client) are not carried
 //   over; crates/server/tests/smoke covers the behaviour.
 
@@ -59,6 +64,7 @@ mod constraints;
 mod ddl;
 mod dsql;
 mod internal;
+mod occ;
 mod startup;
 mod sys;
 
@@ -67,6 +73,8 @@ use std::net::SocketAddr;
 use std::num::NonZero;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
+
+pub use occ::OccOptions;
 
 use async_trait::async_trait;
 use bytes::Bytes;
@@ -178,6 +186,8 @@ pub fn open_database(storage: &Storage) -> anyhow::Result<Arc<Database>> {
 pub struct ServerOptions {
     /// Transaction limits (the defaults are DSQL's: 3,000 rows, 300 s). Tests lower them.
     pub limits: PolicyLimits,
+    /// The optimistic-concurrency emulation (M4); the defaults are DSQL-like.
+    pub occ: OccOptions,
 }
 
 /// A bound micro-dsql server.
@@ -232,9 +242,9 @@ impl Server {
                         Ok((socket, addr)) => {
                             debug!("client connected from {addr}");
                             let db = self.db.clone();
-                            let limits = self.options.limits;
+                            let options = self.options;
                             connections.spawn(async move {
-                                if let Err(e) = serve_connection(socket, db, limits).await {
+                                if let Err(e) = serve_connection(socket, db, options).await {
                                     error!("error processing connection from {addr}: {e}");
                                 }
                                 debug!("client {addr} disconnected");
@@ -260,7 +270,7 @@ impl Server {
 async fn serve_connection(
     socket: tokio::net::TcpStream,
     db: Arc<Database>,
-    limits: PolicyLimits,
+    options: ServerOptions,
 ) -> anyhow::Result<()> {
     let session = tokio::task::spawn_blocking(move || -> turso_pg::Result<PgConnection> {
         let session = PgConnection::connect_with(&db, ConnectOpts::new())?;
@@ -272,7 +282,8 @@ async fn serve_connection(
     .await??;
     let handler = Arc::new(TursoPgHandler {
         conn: session.clone(),
-        policy: Arc::new(Mutex::new(SessionPolicy::new(limits))),
+        policy: Arc::new(Mutex::new(SessionPolicy::new(options.limits))),
+        occ: options.occ,
         query_parser: Arc::new(TursoQueryParser {
             conn: session.clone(),
         }),
@@ -363,6 +374,7 @@ struct TursoPgHandler {
     conn: PgConnection,
     /// Policy state of this connection; locked only inside blocking closures.
     policy: Arc<Mutex<SessionPolicy>>,
+    occ: OccOptions,
     query_parser: Arc<TursoQueryParser>,
 }
 
@@ -444,6 +456,7 @@ impl SimpleQueryHandler for TursoPgHandler {
     {
         let conn = self.conn.clone();
         let policy = self.policy.clone();
+        let opts = self.occ;
         let query = query.to_owned();
         blocking(move || {
             // Per the PostgreSQL simple query protocol, a query string may contain
@@ -452,7 +465,9 @@ impl SimpleQueryHandler for TursoPgHandler {
             let plans = plan_statements(&conn, &policy, &statements)?;
             plans
                 .iter()
-                .map(|plan| run_simple_statement(&conn, &policy, plan).map(Outcome::into_response))
+                .map(|plan| {
+                    run_simple_statement(&conn, &policy, plan, &opts).map(Outcome::into_response)
+                })
                 .collect()
         })
         .await
@@ -507,7 +522,8 @@ impl TursoPgHandler {
         let conn = self.conn.clone();
         let policy = self.policy.clone();
         let text = query.query;
-        let plans = blocking(move || {
+        let opts = self.occ;
+        let (plans, batch) = blocking(move || {
             // Errors raised here never reach PgConnection::prepare, so report
             // them to the session: any error inside a transaction block aborts
             // the block.
@@ -520,7 +536,9 @@ impl TursoPgHandler {
             let checked = micro_dsql_policy::rewrite::pre_parse(&text);
             turso_pg_parser::parse(&checked.text).map_err(parse_error)?;
             let statements = turso_pg_parser::split_statements(&text).map_err(parse_error)?;
-            plan_statements(&conn, &policy, &statements)
+            let plans = plan_statements(&conn, &policy, &statements)?;
+            let batch = occ::is_batch(&conn, &plans);
+            Ok((plans, batch))
         })
         .await?;
         if plans.is_empty() {
@@ -530,31 +548,60 @@ impl TursoPgHandler {
                 ))
                 .await?;
         }
-        for plan in plans {
+        if batch {
+            // One implicit transaction (FR-006): the statements run together, their answers
+            // are sent in order, and the error that stopped them (if any) follows.
             let conn = self.conn.clone();
             let policy = self.policy.clone();
-            let outcome = blocking(move || run_simple_statement(&conn, &policy, &plan)).await?;
-            match outcome {
-                Outcome::Copy {
-                    column_count,
-                    rows,
-                    error,
-                } => send_copy_out(client, column_count, rows, error).await?,
-                outcome => match outcome.into_response() {
-                    Response::Query(mut result) if result.command_tag() != "SELECT" => {
-                        send_rows_with_own_tag(client, &mut result, true).await?
-                    }
-                    Response::Query(mut result) => {
-                        send_query_response(client, &mut result, true).await?
-                    }
-                    Response::Execution(tag) => send_execution_response(client, tag).await?,
-                    _ => unreachable!("simple queries return query or execution responses"),
-                },
+            let result = blocking(move || {
+                Ok(occ::run_batch(&conn, &policy, &plans, |plan| {
+                    run_simple_statement(&conn, &policy, plan, &opts)
+                }))
+            })
+            .await?;
+            for outcome in result.outcomes {
+                send_simple_outcome(client, outcome).await?;
+                client.set_transaction_status(wire_transaction_status(&self.conn));
             }
-            client.set_transaction_status(wire_transaction_status(&self.conn));
+            if let Some(error) = result.error {
+                return Err(error);
+            }
+        } else {
+            for plan in plans {
+                let conn = self.conn.clone();
+                let policy = self.policy.clone();
+                let outcome =
+                    blocking(move || run_simple_statement(&conn, &policy, &plan, &opts)).await?;
+                send_simple_outcome(client, outcome).await?;
+                client.set_transaction_status(wire_transaction_status(&self.conn));
+            }
         }
         client.set_state(PgWireConnectionState::ReadyForQuery);
         send_ready_for_query(client, client.transaction_status()).await
+    }
+}
+
+/// Sends the result of one statement of a simple query.
+async fn send_simple_outcome<C>(client: &mut C, outcome: Outcome) -> PgWireResult<()>
+where
+    C: ClientInfo + ClientPortalStore + Sink<PgWireBackendMessage> + Unpin + Send + Sync,
+    C::Error: Debug,
+    PgWireError: From<<C as Sink<PgWireBackendMessage>>::Error>,
+{
+    match outcome {
+        Outcome::Copy {
+            column_count,
+            rows,
+            error,
+        } => send_copy_out(client, column_count, rows, error).await,
+        outcome => match outcome.into_response() {
+            Response::Query(mut result) if result.command_tag() != "SELECT" => {
+                send_rows_with_own_tag(client, &mut result, true).await
+            }
+            Response::Query(mut result) => send_query_response(client, &mut result, true).await,
+            Response::Execution(tag) => send_execution_response(client, tag).await,
+            _ => unreachable!("simple queries return query or execution responses"),
+        },
     }
 }
 
@@ -584,8 +631,26 @@ fn run_simple_statement(
     conn: &PgConnection,
     policy: &Mutex<SessionPolicy>,
     plan: &StatementPlan,
+    opts: &OccOptions,
 ) -> PgWireResult<Outcome> {
-    dsql::run_planned(conn, policy, plan, &Format::UnifiedText, |sql| {
+    occ::run(
+        conn,
+        policy,
+        plan,
+        &Format::UnifiedText,
+        opts,
+        &mut SimpleEngine { conn },
+    )
+}
+
+/// The engine as the simple protocol uses it: text in, rows or a command tag out.
+struct SimpleEngine<'a> {
+    conn: &'a PgConnection,
+}
+
+impl occ::Engine for SimpleEngine<'_> {
+    fn run(&mut self, sql: &str) -> PgWireResult<(Outcome, u64)> {
+        let conn = self.conn;
         let copy = parse_copy_to_stdout(sql).map_err(|error| {
             conn.abort_transaction_block_on_error();
             pg_error(turso_core::LimboError::ParseError(error.to_string()).into())
@@ -602,7 +667,34 @@ fn run_simple_statement(
             let header = Arc::new(build_field_info(&stmt, &Format::UnifiedText, &hints));
             execute_query(&mut stmt, header)
         }
-    })
+    }
+
+    fn empty(&mut self, sql: &str) -> PgWireResult<(Outcome, u64)> {
+        let stmt = self.conn.prepare(sql).map_err(pg_error)?;
+        let parsed = parse_statement(sql)?;
+        let hints = micro_dsql_policy::analyze(sql).results;
+        Ok((
+            empty_outcome(&stmt, &parsed, &Format::UnifiedText, &hints),
+            0,
+        ))
+    }
+}
+
+/// A statement's result with no rows: its header, or its command tag with a 0 count.
+fn empty_outcome(
+    stmt: &turso_pg::Statement,
+    parsed: &ParseResult,
+    format: &Format,
+    hints: &[Option<ResultHint>],
+) -> Outcome {
+    if stmt.result_kind() == StatementResultKind::Rows {
+        Outcome::Rows {
+            header: Arc::new(build_field_info(stmt, format, hints)),
+            rows: Vec::new(),
+        }
+    } else {
+        Outcome::Command(wire_tag(CommandTag::of(parsed), 0))
+    }
 }
 
 /// Sends a result set and completes it with the result's command tag as it is, where pgwire's
@@ -826,28 +918,19 @@ impl ExtendedQueryHandler for TursoPgHandler {
         let parameters = portal.parameters.clone();
         let parameter_format = portal.parameter_format.clone();
         let result_format = portal.result_column_format.clone();
+        let opts = self.occ;
         blocking(move || {
             let plan = statement.plan.clone();
-            dsql::run_planned(&conn, &policy, &plan, &result_format, |sql| {
-                let mut stmt = conn.prepare(sql).map_err(pg_error)?;
-
-                // Bind parameters from the portal
-                bind_portal_parameters(&mut stmt, &statement, &parameters, &parameter_format)?;
-
-                let parsed = parse_statement(sql)?;
-                if stmt.result_kind() != StatementResultKind::Rows {
-                    return execute_non_query(&mut stmt, &parsed);
-                }
-
-                let header = Arc::new(build_field_info(
-                    &stmt,
-                    &result_format,
-                    &statement.result_hints,
-                ));
-                execute_query(&mut stmt, header)
-            })
-            .map(Outcome::into_response)
-            .map(|response| with_transaction_state(&conn, response))
+            let mut engine = PortalEngine {
+                conn: &conn,
+                statement: &statement,
+                parameters: &parameters,
+                parameter_format: &parameter_format,
+                result_format: &result_format,
+            };
+            occ::run(&conn, &policy, &plan, &result_format, &opts, &mut engine)
+                .map(Outcome::into_response)
+                .map(|response| with_transaction_state(&conn, response))
         })
         .await
     }
@@ -893,6 +976,56 @@ impl ExtendedQueryHandler for TursoPgHandler {
         let format = portal.result_column_format.clone();
         blocking(move || describe(&conn, &statement, &format).map(DescribePortalResponse::new))
             .await
+    }
+}
+
+/// The engine as the extended protocol uses it: the portal's parameters are bound to every
+/// statement it runs.
+struct PortalEngine<'a> {
+    conn: &'a PgConnection,
+    statement: &'a PgStatement,
+    parameters: &'a [Option<Bytes>],
+    parameter_format: &'a Format,
+    result_format: &'a Format,
+}
+
+impl occ::Engine for PortalEngine<'_> {
+    fn run(&mut self, sql: &str) -> PgWireResult<(Outcome, u64)> {
+        let mut stmt = self.conn.prepare(sql).map_err(pg_error)?;
+
+        // Bind parameters from the portal
+        bind_portal_parameters(
+            &mut stmt,
+            self.statement,
+            self.parameters,
+            self.parameter_format,
+        )?;
+
+        let parsed = parse_statement(sql)?;
+        if stmt.result_kind() != StatementResultKind::Rows {
+            return execute_non_query(&mut stmt, &parsed);
+        }
+
+        let header = Arc::new(build_field_info(
+            &stmt,
+            self.result_format,
+            &self.statement.result_hints,
+        ));
+        execute_query(&mut stmt, header)
+    }
+
+    fn empty(&mut self, sql: &str) -> PgWireResult<(Outcome, u64)> {
+        let stmt = self.conn.prepare(sql).map_err(pg_error)?;
+        let parsed = parse_statement(sql)?;
+        Ok((
+            empty_outcome(
+                &stmt,
+                &parsed,
+                self.result_format,
+                &self.statement.result_hints,
+            ),
+            0,
+        ))
     }
 }
 

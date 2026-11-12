@@ -11,6 +11,7 @@ use turso_pg::PgConnection;
 
 use crate::dsql::txn_status;
 use crate::internal::{exec, ident as quote, literal, query, user_error};
+use crate::occ;
 use crate::sys::Job;
 
 /// Refuses `ALTER TABLE ... DROP COLUMN` of a primary-key column (`drop_pk_column`): the
@@ -81,33 +82,20 @@ impl Drop for EnforcementOff<'_> {
 /// Runs `steps` atomically on the session's connection.
 ///
 /// Inside a client transaction the steps are part of it (a failure aborts the block like any
-/// failed DDL). When the session is idle, an internal `BEGIN` ... `COMMIT` wraps them
-/// (`ROLLBACK` on any error) and the session is idle again afterwards. This is the one place
-/// where micro-dsql opens a transaction for a client statement: nothing else runs inside it, it
+/// failed DDL). When the session is idle, [`occ::internal_transaction`] wraps them: an
+/// unpinned `BEGIN` ... `COMMIT` (`ROLLBACK` on any error), retried as a whole while the engine's
+/// lock is contended, and the session is idle again afterwards. Nothing else runs inside it, it
 /// starts and ends within the execution of that one statement, and the policy sees `Idle` before
-/// and after. If the server's way of starting transactions changes (M4), this is the helper to
-/// route through it.
+/// and after. `steps` can run more than once (each failed attempt applied nothing).
 pub(crate) fn in_internal_transaction<T>(
     conn: &PgConnection,
-    steps: impl FnOnce() -> PgWireResult<T>,
+    steps: impl FnMut() -> PgWireResult<T>,
 ) -> PgWireResult<T> {
     if txn_status(conn) != TxnStatus::Idle {
+        let mut steps = steps;
         return steps().inspect_err(|_| conn.abort_transaction_block_on_error());
     }
-    exec(conn, "BEGIN")?;
-    match steps() {
-        Ok(value) => {
-            if let Err(error) = exec(conn, "COMMIT") {
-                let _ = exec(conn, "ROLLBACK");
-                return Err(error);
-            }
-            Ok(value)
-        }
-        Err(error) => {
-            let _ = exec(conn, "ROLLBACK");
-            Err(error)
-        }
-    }
+    occ::internal_transaction(conn, steps)
 }
 
 /// How an `ADD CONSTRAINT ... NOT VALID` is stated to the engine.

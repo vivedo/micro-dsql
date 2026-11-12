@@ -26,3 +26,8 @@ uuid = { workspace = true, features = ["v4"] }
 tracing-subscriber.workspace = true
 tokio-postgres.workspace = true
 uuid.workspace = true
+
+# The OCC scenario suite (M4) lives at the repository root, next to the other test assets.
+[[test]]
+name = "occ"
+path = "../../tests/occ/main.rs"

@@ -58,6 +58,17 @@ pub fn oc001() -> PolicyError {
     )
 }
 
+/// `0A000`: a locking clause (`FOR UPDATE`, `FOR KEY SHARE`) on something other than a
+/// single-table SELECT. DSQL's own text for these forms has not been recorded; replace this one
+/// when it is.
+pub fn locking_read_form() -> PolicyError {
+    PolicyError::new(
+        "locking_read_form",
+        "0A000",
+        "locking clause is only supported on a single-table SELECT",
+    )
+}
+
 /// `54000`: more rows changed in one transaction than DSQL allows.
 pub fn row_limit() -> PolicyError {
     PolicyError::new("txn_row_limit", "54000", "transaction row limit exceeded")
@@ -129,9 +140,10 @@ pub enum EngineFailure {
     Other,
 }
 
-/// Shapes an engine failure: conflicts and lock contention become DSQL's `40001` errors
-/// (`55P03` is an interim mapping until autocommit runs as a transaction, M4); everything
-/// else keeps the PostgreSQL-style shaping.
+/// Shapes an engine failure: conflicts become DSQL's `40001` errors; lock contention
+/// (`55P03`) that outlived the server's retries is reported as OC001 (the only observed cause
+/// is a concurrent schema change, and DSQL clients retry OC001); everything else keeps the
+/// PostgreSQL-style shaping.
 pub fn shape_engine_error(
     failure: EngineFailure,
     sqlstate: &str,
@@ -141,8 +153,8 @@ pub fn shape_engine_error(
     original_sql: &str,
 ) -> ShapedError {
     let policy = match failure {
-        EngineFailure::DataConflict | EngineFailure::LockBusy => oc000(),
-        EngineFailure::SchemaConflict => oc001(),
+        EngineFailure::DataConflict => oc000(),
+        EngineFailure::SchemaConflict | EngineFailure::LockBusy => oc001(),
         EngineFailure::Other => {
             let mut shaped = shape_error(sqlstate, message, has_table, original_sql);
             shaped.detail = detail.map(str::to_owned);
@@ -486,13 +498,21 @@ mod tests {
 
     #[test]
     fn engine_conflicts_become_dsql_errors() {
-        for failure in [EngineFailure::DataConflict, EngineFailure::LockBusy] {
+        // M4 (FR-004): lock contention that outlives the server's retries is OC001, no longer
+        // the interim OC000.
+        for (failure, message) in [
+            (
+                EngineFailure::DataConflict,
+                "change conflicts with another transaction (OC000)",
+            ),
+            (
+                EngineFailure::LockBusy,
+                "schema has been updated by another transaction (OC001)",
+            ),
+        ] {
             let e = shape_engine_error(failure, "55P03", "Database is busy", None, false, "x");
             assert_eq!(e.sqlstate, "40001");
-            assert_eq!(
-                e.message,
-                "change conflicts with another transaction (OC000)"
-            );
+            assert_eq!(e.message, message);
             assert_eq!(e.position, None);
         }
         let e = shape_engine_error(

@@ -7,6 +7,8 @@
 //!
 //! - [`statement`]: [`StatementPlan`], the pipeline run once per statement text;
 //! - [`classify`]: DDL / DML / read / transaction control / session command;
+//! - [`occ`], [`locking`]: optimistic-concurrency state of a transaction and the planning of
+//!   `SELECT ... FOR UPDATE` (M4);
 //! - [`session`]: [`SessionPolicy`], the per-connection transaction discipline and limits;
 //! - [`rules`], [`types`]: the stateless deny rules and column type checks;
 //! - [`settings`]: the SET whitelist and the remembered values behind `SHOW`;
@@ -23,6 +25,8 @@ pub mod errors;
 pub mod identity;
 pub mod intercept;
 pub mod jobs;
+pub mod locking;
+pub mod occ;
 pub mod params;
 pub mod rewrite;
 pub mod rules;
@@ -39,6 +43,8 @@ pub use errors::{
 };
 pub use intercept::{intercept, Intercept};
 pub use jobs::{DdlAction, JobAction, NotValidKind, TableRef};
+pub use locking::{plan_locking, LockStrength, LockingRead, TouchPlan};
+pub use occ::OccTxn;
 pub use params::{analyze, ParamHint, ResultHint, StatementShape};
 pub use session::{
     Admission, ColumnType, PolicyLimits, Reply, ReplyColumn, SessionPolicy, TxnState, TxnStatus,
