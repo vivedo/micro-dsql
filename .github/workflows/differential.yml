@@ -24,8 +24,16 @@ jobs:
           sudo apt-get install -y postgresql-client-16
           psql --version
 
-      # Reconcile (after M1): replace this step with downloading the binary built by
-      # M1's workflow (or building it), then keep the start command below.
+      - name: Install build dependencies (libclang for pg_query)
+        run: sudo apt-get install -y clang libclang-dev
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Build micro-dsql
+        run: cargo build --release -p micro-dsql
+
       - name: Start micro-dsql if a binary is available
         run: |
           bin=""
