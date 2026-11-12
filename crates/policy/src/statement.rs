@@ -7,6 +7,7 @@ use crate::errors::PolicyError;
 use crate::intercept::{intercept_node, Intercept};
 use crate::rewrite::{apply_edits, ast_rewrites, pre_parse};
 use crate::rules::check_rules;
+use crate::settings::{check_set_config, SettingCommand};
 
 /// The result of running the policy pipeline on one statement text (contracts/policy-api.md §2).
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -20,6 +21,8 @@ pub struct StatementPlan {
     pub class: StatementClass,
     /// The first stateless deny rule that matches.
     pub refusal: Option<PolicyError>,
+    /// A SET / RESET / SHOW the policy handles (remembered settings, no-ops).
+    pub setting: Option<SettingCommand>,
     /// A statement the server answers itself (fixed `SHOW`, `DEALLOCATE`, `SET timezone`).
     pub intercept: Option<Intercept>,
     /// Row count of an `INSERT ... VALUES` list.
@@ -36,6 +39,7 @@ impl StatementPlan {
             parse_failed,
             class: StatementClass::Other,
             refusal: None,
+            setting: None,
             intercept: None,
             values_rows: None,
         };
@@ -49,13 +53,31 @@ impl StatementPlan {
             return plan(text.into_owned(), false);
         };
         let edits = ast_rewrites(node, &text);
+        // Stateless refusals: deny rules first, then the settings whitelist.
+        let (setting, setting_refusal) = match SettingCommand::from_ast(node) {
+            Ok(setting) => (setting, check_set_config(&text)),
+            Err(error) => (None, Some(error)),
+        };
         Self {
             engine_sql: apply_edits(&text, &edits).into_owned(),
             class: classify(node),
-            refusal: check_rules(node, &text),
+            refusal: check_rules(node, &text).or(setting_refusal),
+            setting,
             intercept: intercept_node(node),
             values_rows: values_rows(node),
             ..plan(String::new(), false)
+        }
+    }
+}
+
+impl StatementPlan {
+    /// The column name when the policy answers this statement with a one-row `SHOW` result
+    /// (needed to describe the statement in the extended protocol).
+    pub fn show_column(&self) -> Option<&str> {
+        match (&self.setting, &self.intercept) {
+            (Some(SettingCommand::Show { name }), _) => Some(crate::settings::show_column(name)),
+            (_, Some(Intercept::Show { column, .. })) => Some(column),
+            _ => None,
         }
     }
 }

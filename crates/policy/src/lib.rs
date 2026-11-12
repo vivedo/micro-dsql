@@ -8,6 +8,8 @@
 //! - [`statement`]: [`StatementPlan`], the pipeline run once per statement text;
 //! - [`classify`]: DDL / DML / read / transaction control / session command;
 //! - [`session`]: [`SessionPolicy`], the per-connection transaction discipline and limits;
+//! - [`rules`], [`types`]: the stateless deny rules and column type checks;
+//! - [`settings`]: the SET whitelist and the remembered values behind `SHOW`;
 //! - [`errors`]: the one place where DSQL's error texts live, and the PostgreSQL-style shaping
 //!   of ordinary engine errors;
 //! - [`rewrite`]: text rewrites of what the engine runs (pre-parse stage and AST edits);
@@ -23,6 +25,7 @@ pub mod rewrite;
 pub mod rules;
 pub mod server_params;
 pub mod session;
+pub mod settings;
 pub mod statement;
 pub mod types;
 
@@ -34,4 +37,5 @@ pub use errors::{
 pub use intercept::{intercept, Intercept};
 pub use params::{analyze, ParamHint, ResultHint, StatementShape};
 pub use session::{Admission, PolicyLimits, Reply, SessionPolicy, TxnStatus};
+pub use settings::{SessionSettings, SettingCommand};
 pub use statement::StatementPlan;

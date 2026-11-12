@@ -75,7 +75,7 @@ pub fn intercept_node(node: &NodeEnum) -> Option<Intercept> {
     }
 }
 
-fn const_text(node: &NodeEnum) -> Option<String> {
+pub(crate) fn const_text(node: &NodeEnum) -> Option<String> {
     let NodeEnum::AConst(c) = node else {
         return None;
     };
@@ -83,6 +83,7 @@ fn const_text(node: &NodeEnum) -> Option<String> {
         a_const::Val::Sval(s) => Some(s.sval.clone()),
         a_const::Val::Ival(i) => Some(i.ival.to_string()),
         a_const::Val::Fval(f) => Some(f.fval.clone()),
+        a_const::Val::Boolval(b) => Some(b.boolval.to_string()),
         _ => None,
     }
 }

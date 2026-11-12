@@ -4,11 +4,13 @@
 //! this module ([`SessionPolicy::admit`] before a statement runs, [`SessionPolicy::complete`]
 //! or [`SessionPolicy::failed`] after); nothing here knows about the engine (constitution III).
 
+use std::collections::HashMap;
 use std::time::{Duration, Instant};
 
 use crate::classify::{StatementClass, TxnControl};
 use crate::errors::{self, PolicyError};
 use crate::intercept::Intercept;
+use crate::settings::{default_value, show_column, SessionSettings, SettingCommand};
 use crate::statement::StatementPlan;
 
 /// Limits of a DSQL transaction. The shipped binary uses the defaults.
@@ -68,6 +70,8 @@ struct TxnState {
     saw_dml: bool,
     /// Sum of the engine change counts of the DML statements.
     rows_changed: u64,
+    /// `SET LOCAL` values; dropped with the transaction.
+    local: HashMap<&'static str, String>,
 }
 
 impl TxnState {
@@ -77,6 +81,7 @@ impl TxnState {
             ddl_count: 0,
             saw_dml: false,
             rows_changed: 0,
+            local: HashMap::new(),
         }
     }
 }
@@ -85,12 +90,17 @@ impl TxnState {
 #[derive(Debug)]
 pub struct SessionPolicy {
     limits: PolicyLimits,
+    settings: SessionSettings,
     txn: Option<TxnState>,
 }
 
 impl SessionPolicy {
     pub fn new(limits: PolicyLimits) -> Self {
-        Self { limits, txn: None }
+        Self {
+            limits,
+            settings: SessionSettings::default(),
+            txn: None,
+        }
     }
 
     /// Decides what to do with a statement before it runs.
@@ -145,6 +155,11 @@ impl SessionPolicy {
         {
             return Admission::Refuse(errors::row_limit());
         }
+        if let Some(setting) = &plan.setting {
+            if let Some(admission) = self.admit_setting(setting, status) {
+                return admission;
+            }
+        }
         match &plan.intercept {
             Some(Intercept::Show { column, value }) => Admission::Respond(Reply::Show {
                 column: (*column).to_owned(),
@@ -165,6 +180,74 @@ impl SessionPolicy {
         }
     }
 
+    /// Settings the policy answers itself; `None` sends the statement to the engine.
+    fn admit_setting<'p>(
+        &mut self,
+        setting: &SettingCommand,
+        status: TxnStatus,
+    ) -> Option<Admission<'p>> {
+        let command = |tag| Some(Admission::Respond(Reply::Command { tag }));
+        let local_txn = if status == TxnStatus::Active {
+            self.txn.as_mut()
+        } else {
+            None
+        };
+        match setting {
+            // The engine runs it; the remembered values are cleared in `complete`.
+            SettingCommand::ResetAll => None,
+            SettingCommand::Noop => command("SET"),
+            SettingCommand::Show { name } => {
+                let local = local_txn.and_then(|t| t.local.get(name).cloned());
+                Some(Admission::Respond(Reply::Show {
+                    column: show_column(name).to_owned(),
+                    value: local.unwrap_or_else(|| self.settings.get(name)),
+                }))
+            }
+            SettingCommand::Set {
+                name,
+                value,
+                local: true,
+            } => {
+                // Outside a transaction `SET LOCAL` has no effect (PostgreSQL only warns).
+                if let Some(txn) = local_txn {
+                    txn.local.insert(name, value.clone());
+                }
+                command("SET")
+            }
+            SettingCommand::Set {
+                name,
+                value,
+                local: false,
+            } => {
+                if let Some(txn) = local_txn {
+                    txn.local.remove(name);
+                }
+                self.settings.set(name, value);
+                command("SET")
+            }
+            SettingCommand::SetDefault { name, local: true } => {
+                if let Some(txn) = local_txn {
+                    txn.local.insert(name, default_value(name));
+                }
+                command("SET")
+            }
+            SettingCommand::SetDefault { name, local: false } => {
+                if let Some(txn) = local_txn {
+                    txn.local.remove(name);
+                }
+                self.settings.reset(name);
+                command("SET")
+            }
+            SettingCommand::Reset { name } => {
+                if let Some(txn) = local_txn {
+                    txn.local.remove(name);
+                }
+                self.settings.reset(name);
+                command("RESET")
+            }
+        }
+    }
+
     /// After the engine ran a statement successfully: transaction boundaries.
     pub fn complete(
         &mut self,
@@ -173,6 +256,9 @@ impl SessionPolicy {
         status_after: TxnStatus,
         now: Instant,
     ) -> Result<(), PolicyError> {
+        if plan.setting == Some(SettingCommand::ResetAll) {
+            self.settings.reset_all();
+        }
         match status_after {
             TxnStatus::Idle => self.txn = None,
             TxnStatus::Active | TxnStatus::Aborted => {
@@ -181,6 +267,9 @@ impl SessionPolicy {
                     self.txn = Some(TxnState::new(now));
                     return Ok(());
                 };
+                if plan.setting == Some(SettingCommand::ResetAll) {
+                    txn.local.clear();
+                }
                 match plan.class {
                     StatementClass::Ddl => txn.ddl_count += 1,
                     StatementClass::Dml => {
@@ -635,5 +724,175 @@ mod tests {
                 "CREATE TABLE b (id int)"
             ]))
             .is_ok());
+    }
+
+    // --- settings (US4) ---
+
+    fn respond(s: &mut SessionPolicy, sql: &str, status: TxnStatus) -> Admission<'static> {
+        // Leak the plan: the admission borrows it, and the test only inspects the reply.
+        let p: &'static StatementPlan = Box::leak(Box::new(plan(sql)));
+        s.admit(p, status, Instant::now())
+    }
+
+    fn show(s: &mut SessionPolicy, name: &str, status: TxnStatus) -> String {
+        match respond(s, &format!("SHOW {name}"), status) {
+            Admission::Respond(Reply::Show { value, .. }) => value,
+            other => panic!("SHOW {name}: {other:?}"),
+        }
+    }
+
+    fn tag(a: Admission<'_>) -> &'static str {
+        match a {
+            Admission::Respond(Reply::Command { tag }) => tag,
+            other => panic!("{other:?}"),
+        }
+    }
+
+    #[test]
+    fn remembered_settings_are_set_shown_and_reset() {
+        let mut s = SessionPolicy::new(PolicyLimits::default());
+        let idle = TxnStatus::Idle;
+        assert_eq!(show(&mut s, "enable_seqscan", idle), "on");
+        assert_eq!(
+            tag(respond(&mut s, "SET enable_seqscan = off", idle)),
+            "SET"
+        );
+        assert_eq!(show(&mut s, "enable_seqscan", idle), "off");
+        match respond(&mut s, "SHOW DateStyle", idle) {
+            Admission::Respond(Reply::Show { column, value }) => {
+                assert_eq!((column.as_str(), value.as_str()), ("DateStyle", "ISO, MDY"))
+            }
+            other => panic!("{other:?}"),
+        }
+        assert_eq!(tag(respond(&mut s, "RESET enable_seqscan", idle)), "RESET");
+        assert_eq!(show(&mut s, "enable_seqscan", idle), "on");
+        respond(&mut s, "SET enable_seqscan = off", idle);
+        assert_eq!(
+            tag(respond(&mut s, "SET enable_seqscan TO DEFAULT", idle)),
+            "SET"
+        );
+        assert_eq!(show(&mut s, "enable_seqscan", idle), "on");
+    }
+
+    #[test]
+    fn reset_all_reaches_the_engine_and_clears_values_on_completion() {
+        let now = Instant::now();
+        let mut s = SessionPolicy::new(PolicyLimits::default());
+        respond(&mut s, "SET enable_seqscan = off", TxnStatus::Idle);
+        respond(&mut s, "SET datestyle = ISO, DMY", TxnStatus::Idle);
+        let reset = plan("RESET ALL");
+        assert!(matches!(
+            s.admit(&reset, TxnStatus::Idle, now),
+            Admission::Run { sql: "RESET ALL" }
+        ));
+        // Nothing is cleared until the engine has run it.
+        assert_eq!(show(&mut s, "enable_seqscan", TxnStatus::Idle), "off");
+        s.complete(&reset, 0, TxnStatus::Idle, now).unwrap();
+        assert_eq!(show(&mut s, "enable_seqscan", TxnStatus::Idle), "on");
+        assert_eq!(show(&mut s, "datestyle", TxnStatus::Idle), "ISO, MDY");
+        // A failed RESET ALL leaves the values alone.
+        respond(&mut s, "SET enable_seqscan = off", TxnStatus::Idle);
+        s.failed(TxnStatus::Idle);
+        assert_eq!(show(&mut s, "enable_seqscan", TxnStatus::Idle), "off");
+    }
+
+    #[test]
+    fn set_local_lasts_until_the_transaction_ends() {
+        let now = Instant::now();
+        let mut s = begun(PolicyLimits::default(), now);
+        let active = TxnStatus::Active;
+        assert_eq!(
+            tag(respond(&mut s, "SET LOCAL enable_seqscan = off", active)),
+            "SET"
+        );
+        assert_eq!(show(&mut s, "enable_seqscan", active), "off");
+        s.complete(&plan("COMMIT"), 0, TxnStatus::Idle, now)
+            .unwrap();
+        assert_eq!(show(&mut s, "enable_seqscan", TxnStatus::Idle), "on");
+        // ROLLBACK ends it too.
+        s.complete(&plan("BEGIN"), 0, TxnStatus::Active, now)
+            .unwrap();
+        respond(&mut s, "SET LOCAL enable_seqscan = off", active);
+        s.complete(&plan("ROLLBACK"), 0, TxnStatus::Idle, now)
+            .unwrap();
+        assert_eq!(show(&mut s, "enable_seqscan", TxnStatus::Idle), "on");
+    }
+
+    #[test]
+    fn set_local_outside_a_transaction_has_no_effect() {
+        let mut s = SessionPolicy::new(PolicyLimits::default());
+        assert_eq!(
+            tag(respond(
+                &mut s,
+                "SET LOCAL enable_seqscan = off",
+                TxnStatus::Idle
+            )),
+            "SET"
+        );
+        assert_eq!(show(&mut s, "enable_seqscan", TxnStatus::Idle), "on");
+    }
+
+    #[test]
+    fn a_session_set_inside_a_transaction_survives_it() {
+        let now = Instant::now();
+        let mut s = begun(PolicyLimits::default(), now);
+        respond(&mut s, "SET LOCAL enable_seqscan = off", TxnStatus::Active);
+        respond(&mut s, "SET enable_seqscan = off", TxnStatus::Active);
+        respond(&mut s, "SET LOCAL enable_hashjoin = off", TxnStatus::Active);
+        s.complete(&plan("COMMIT"), 0, TxnStatus::Idle, now)
+            .unwrap();
+        assert_eq!(show(&mut s, "enable_seqscan", TxnStatus::Idle), "off");
+        assert_eq!(show(&mut s, "enable_hashjoin", TxnStatus::Idle), "on");
+    }
+
+    #[test]
+    fn role_is_remembered_for_the_transaction_only() {
+        let now = Instant::now();
+        let mut s = begun(PolicyLimits::default(), now);
+        assert_eq!(show(&mut s, "role", TxnStatus::Active), "none");
+        assert_eq!(
+            tag(respond(&mut s, "SET LOCAL role app", TxnStatus::Active)),
+            "SET"
+        );
+        assert_eq!(show(&mut s, "role", TxnStatus::Active), "app");
+        s.complete(&plan("COMMIT"), 0, TxnStatus::Idle, now)
+            .unwrap();
+        assert_eq!(show(&mut s, "role", TxnStatus::Idle), "none");
+    }
+
+    #[test]
+    fn settings_statements_obey_the_other_admission_rules() {
+        let mut s = SessionPolicy::new(PolicyLimits::default());
+        // Refusals.
+        assert!(
+            matches!(respond(&mut s, "SET work_mem = '1MB'", TxnStatus::Idle), Admission::Refuse(e) if e.rule == "set_not_supported")
+        );
+        // Forwarded names go to the engine.
+        assert!(matches!(
+            respond(&mut s, "SET search_path = a", TxnStatus::Idle),
+            Admission::Run { .. }
+        ));
+        assert!(matches!(
+            respond(&mut s, "SHOW search_path", TxnStatus::Idle),
+            Admission::Run { .. }
+        ));
+        // Accepted no-op.
+        assert_eq!(
+            tag(respond(
+                &mut s,
+                "SET SESSION CHARACTERISTICS AS TRANSACTION ISOLATION LEVEL REPEATABLE READ",
+                TxnStatus::Idle
+            )),
+            "SET"
+        );
+        // An aborted block answers 25P02 through the engine, whatever the statement.
+        assert!(matches!(
+            respond(&mut s, "SET enable_seqscan = off", TxnStatus::Aborted),
+            Admission::Run { .. }
+        ));
+        assert!(matches!(
+            respond(&mut s, "SHOW enable_seqscan", TxnStatus::Aborted),
+            Admission::Run { .. }
+        ));
     }
 }
