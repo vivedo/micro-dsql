@@ -30,7 +30,8 @@ Every out-of-scope feature delays that answer and adds surface to keep working a
   file MUST keep its MIT licence notice and MUST record the upstream commit hash it was taken from.
 - A Turso fork or patch branch MUST NOT be introduced unless a required hook is genuinely missing
   inside `turso_pg` / `turso_core` and cannot be provided from our own crates. Any such patch MUST
-  be minimal, generic (not DSQL-specific) and upstreamable, and SHOULD be proposed upstream.
+  be minimal and generic (not DSQL-specific). Changes MUST NOT be proposed to Turso upstream
+  (owner decision); patches live only on our own patch branch.
 
 Rationale: the Turso Postgres frontend is pre-1.0 with heavy churn. A pinned dependency plus a
 small vendored file keeps upgrades cheap and predictable; a growing fork does not.
@@ -111,4 +112,4 @@ progress moving without hiding failures or losing the tests that define the targ
 - Compliance is checked at every plan's Constitution Check and before every merge to `main`. Any
   deviation MUST be justified in the plan's Complexity Tracking table.
 
-**Version**: 1.0.0 | **Ratified**: 2026-11-12 | **Last Amended**: 2026-11-12
+**Version**: 1.1.0 | **Ratified**: 2026-11-12 | **Last Amended**: 2026-11-12

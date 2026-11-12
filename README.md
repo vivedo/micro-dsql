@@ -52,3 +52,7 @@ Layout: `bin/micro-dsql` (CLI), `crates/server` (wire server, adapted from Turso
 `postgres/server/lib.rs`, MIT, see [LICENSES/turso-MIT.txt](LICENSES/turso-MIT.txt)),
 `crates/policy` (DSQL rules on the `pg_query` AST, engine-agnostic), `tests/smoke`
 (integration tests), `tests/psql` (target-agnostic psql scenarios, see its README).
+
+## Licence
+
+MIT, see [LICENSE](LICENSE). `crates/server` includes code adapted from Turso (MIT), see [LICENSES/turso-MIT.txt](LICENSES/turso-MIT.txt).

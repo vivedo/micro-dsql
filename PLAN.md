@@ -17,7 +17,7 @@ Written 2026-11-12. Builds on [`research/`](research/README.md); read its execut
 | Engine | Turso's Postgres frontend (`turso_pg` + `turso_core`, MVCC). |
 | Repo shape | **Own small repo** (this folder). Do **not** fork Turso to host DSQL code. Depend on Turso crates as a **git dependency pinned to a commit**. |
 | Wire server | **Vendor and adapt** `postgres/server/lib.rs` (about 930 lines, MIT) into our own crate. Its handler and factory are private and the file is small, so owning it is cheaper than a fork. Keep the MIT notice and record the upstream commit it came from. |
-| Turso patches | Only when a hook is missing inside `turso_pg` / `turso_core` (e.g. `sys.*` registration, autocommit concurrency). Carry them as a minimal patch branch on a fork, wired in with `[patch]`, and propose them upstream as **generic** hooks. |
+| Turso patches | Only when a hook is missing inside `turso_pg` / `turso_core` (e.g. `sys.*` registration, autocommit concurrency). Carry them as a minimal patch branch on a fork, wired in with `[patch]`. **No changes are proposed to Turso upstream** (owner decision, 2026-11-12). |
 | Policy layer | **Backend-agnostic.** It works on the `pg_query` AST plus per-session state, never on Turso internals, so it survives a pivot to embedded PG16 (see research/05, "Pivot target"). |
 
 **Non-goals for the PoC:**
@@ -223,17 +223,17 @@ These are the cheapest rules with the most value: they make a test fail locally 
 4. **`ADD CONSTRAINT … NOT VALID`** and **`ALTER TABLE ASYNC … VALIDATE CONSTRAINT`:** accept them and validate synchronously.
 5. Wire in **Dreamescaper's golden probes** (MIT) as a conformance runner, and track the pass rate in CI.
 
-Items 2–4 are generic PG-compatibility work. Do them as **upstream PRs** first, and carry them on the patch branch only until they're merged.
+Items 2–4 are generic PG-compatibility work. Do them in our own crates (pre-parse rewrites in the server/policy layer) where possible; otherwise carry them on the patch branch. No upstream PRs (§6.2).
 
 **Exit:**
-- at least one target ORM's migrations run cleanly (e.g. SQLAlchemy with the DSQL dialect, or Drizzle);
+- Drizzle's migrations run cleanly (the M3 target ORM, §6.1);
 - golden-probe pass rate is at or above ~60% (the research/05 go criterion).
 
 ### M4 — OCC fidelity (best effort; the riskiest part)
 
 These are listed in order of value per effort. Stop when retry-loop tests behave like DSQL's.
 
-1. **Autocommit DML as a single-statement concurrent transaction**, so `55P03` disappears instead of being remapped. Needs a frontend change: patch or upstream.
+1. **Autocommit DML as a single-statement concurrent transaction**, so `55P03` disappears instead of being remapped. Needs a frontend change: patch branch only (no upstream, §6.2).
 2. **"Doomed transaction" shim:** turn a write-time `WriteWriteConflict` into a deferred OC000 at COMMIT. It's an approximation; the caveat is in research/04 §B.
 3. **Snapshot at BEGIN** instead of at the first statement. Needs a core change.
 4. `FOR UPDATE` treated as a write-set touch; `FOR KEY SHARE` and FK KEY SHARE come after.
@@ -247,25 +247,31 @@ These are listed in order of value per effort. Stop when retry-loop tests behave
 - Control plane.
 - `information_schema`.
 - Binary releases, Docker image, GitHub Action.
+- Driver/ORM compatibility table (drivers from the M0 matrix plus Drizzle and others): status, required client settings, known gaps (§6.1).
 
 ## 5. Risks and how the plan handles them
 
 | Risk | Mitigation |
 |---|---|
 | The Turso PG frontend is experimental and pre-1.0, with heavy churn (≈100 commits/week in `postgres/`) | Pinned rev; bump deliberately with the full test suite; weekly CI job that tries Turso `main` |
-| Your app's SQL hits gaps: JSONB, `information_schema`, ALTER COLUMN, window functions, µs timestamptz | Found in M0 step 3, *before* investing. Fix upstream where generic. |
-| Binary parameters break asyncpg, pgx and Npgsql | Found in M0. Decode binary for common OIDs in our vendored server, and upstream it. |
+| Your app's SQL hits gaps: JSONB, `information_schema`, ALTER COLUMN, window functions, µs timestamptz | Found in M0 step 3, *before* investing. Work around in our own crates, or on the patch branch; no upstream changes. |
+| Binary parameters break asyncpg, pgx and Npgsql | Found in M0. Decode binary for common OIDs in our vendored server. |
 | OCC timing differs (Turso fails at the statement, DSQL at COMMIT) | Retry wrappers handle both. M4 narrows the gap. Document the rest. |
-| The fork grows | Patches only for missing hooks; each one is an upstream PR candidate. Review the patch count at every Turso bump. |
+| The fork grows | Patches only for missing hooks. Review the patch count at every Turso bump. |
 | Turso doesn't hold up | Policy layer is backend-agnostic → pivot to embedded PG16 (research/05). |
 
-## 6. Open questions (decide before or during M1)
+## 6. Open questions
 
-1. **Which apps, drivers and ORMs are the real targets?** This decides the M0 smoke matrix and the M3 ORM.
-2. **Upstream engagement.** Contact Turso before M3 to propose generic hooks (statement validator, startup handler, dialect extension registration)?
-3. **Who owns the Turso patch branch fork**, under which GitHub account or org?
+Decided by the owner on 2026-11-12:
+
+1. **Target ORM:** **Drizzle** is the M3 target ORM, chosen as a generic, representative choice rather than a specific app's stack. A driver/ORM **compatibility table** (what works, what doesn't, with which settings) is required later; see "Later".
+2. **Upstream engagement:** **none.** No changes are proposed to Turso upstream. Anything missing is handled in our own crates, or, only if a hook is genuinely missing, on our own patch branch.
+5. **Licence:** **MIT** (see `LICENSE`).
+
+Still open:
+
+3. **Who owns the Turso patch branch fork**, under which GitHub account or org? Only needed once a patch is unavoidable (likely M3 `sys.*` registration).
 4. **Do we vendor Dreamescaper's golden probes or reference them** (MIT either way)?
-5. **Licence for micro-dsql itself.** It must be compatible with the vendored MIT server code.
 
 ## 7. First session checklist
 
