@@ -20,6 +20,7 @@ turso_pg.workspace = true
 turso_parser.workspace = true
 turso_pg_parser.workspace = true
 micro-dsql-policy.workspace = true
+uuid = { workspace = true, features = ["v4"] }
 
 [dev-dependencies]
 tracing-subscriber.workspace = true

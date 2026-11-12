@@ -42,7 +42,84 @@ pub struct PreParsed<'a> {
 pub type Rewrite = fn(&NodeEnum, &str) -> Vec<TextEdit>;
 
 /// The registered AST rewrites, by id.
-pub const REWRITES: &[(&str, Rewrite)] = &[("bare_numeric", bare_numeric)];
+pub const REWRITES: &[(&str, Rewrite)] = &[
+    ("bare_numeric", bare_numeric),
+    ("index_include", index_include),
+    ("index_nulls_not_distinct", index_nulls_not_distinct),
+];
+
+/// `CREATE UNIQUE INDEX ... NULLS NOT DISTINCT`: the engine does not have it, so the clause is
+/// removed (known gap: NULLs stay distinct).
+fn index_nulls_not_distinct(node: &NodeEnum, sql: &str) -> Vec<TextEdit> {
+    let NodeEnum::IndexStmt(index) = node else {
+        return Vec::new();
+    };
+    if !index.nulls_not_distinct {
+        return Vec::new();
+    }
+    let tokens = scan_positions(sql);
+    tokens
+        .windows(3)
+        .find(|w| {
+            matches!(
+                (w[0].0, w[1].0, w[2].0),
+                (Token::NullsP, Token::Not, Token::Distinct)
+            )
+        })
+        .map(|w| TextEdit {
+            at: w[0].1,
+            remove: w[2].2 - w[0].1,
+            insert: String::new(),
+        })
+        .into_iter()
+        .collect()
+}
+
+/// `CREATE INDEX ... INCLUDE (cols)`: the engine has no covering columns, so the clause is
+/// removed (known gap: the index is built without them; results are the same).
+fn index_include(node: &NodeEnum, sql: &str) -> Vec<TextEdit> {
+    let NodeEnum::IndexStmt(index) = node else {
+        return Vec::new();
+    };
+    if index.index_including_params.is_empty() {
+        return Vec::new();
+    }
+    let tokens = scan_positions(sql);
+    let mut depth = 0_i32;
+    let mut edits = Vec::new();
+    let mut i = 0;
+    while i < tokens.len() {
+        let (token, start, _) = tokens[i];
+        match (token, &sql[tokens[i].1..tokens[i].2]) {
+            (_, "(") => depth += 1,
+            (_, ")") => depth -= 1,
+            (Token::Include, _) if depth == 0 && edits.is_empty() => {
+                // From INCLUDE through the matching closing parenthesis.
+                let mut inner = 0_i32;
+                for &(_, s, e) in &tokens[i + 1..] {
+                    match &sql[s..e] {
+                        "(" => inner += 1,
+                        ")" => {
+                            inner -= 1;
+                            if inner == 0 {
+                                edits.push(TextEdit {
+                                    at: start,
+                                    remove: e - start,
+                                    insert: String::new(),
+                                });
+                                break;
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+            }
+            _ => {}
+        }
+        i += 1;
+    }
+    edits
+}
 
 /// `numeric` / `decimal` without precision in `CREATE TABLE` and `ALTER TABLE ... ADD COLUMN`
 /// means `numeric(18,6)` on DSQL (FR-040): insert `(18,6)` after the type name token.
@@ -82,6 +159,24 @@ fn bare_numeric(node: &NodeEnum, sql: &str) -> Vec<TextEdit> {
         .collect()
 }
 
+/// The tokens of `sql` with their byte ranges (empty when the scanner fails).
+fn scan_positions(sql: &str) -> Vec<(Token, usize, usize)> {
+    let Ok(scanned) = pg_query::scan(sql) else {
+        return Vec::new();
+    };
+    scanned
+        .tokens
+        .iter()
+        .filter_map(|t| {
+            Some((
+                Token::try_from(t.token).ok()?,
+                usize::try_from(t.start).ok()?,
+                usize::try_from(t.end).ok()?,
+            ))
+        })
+        .collect()
+}
+
 /// Stage 1: raw text before parsing (research.md D1).
 ///
 /// DSQL's `ASYNC` keyword (`CREATE [UNIQUE] INDEX ASYNC ...`, `ALTER TABLE ASYNC ...`) is not
@@ -102,20 +197,7 @@ pub fn pre_parse(sql: &str) -> PreParsed<'_> {
     {
         return unchanged();
     }
-    let Ok(scanned) = pg_query::scan(sql) else {
-        return unchanged();
-    };
-    let tokens: Vec<(Token, usize, usize)> = scanned
-        .tokens
-        .iter()
-        .filter_map(|t| {
-            Some((
-                Token::try_from(t.token).ok()?,
-                usize::try_from(t.start).ok()?,
-                usize::try_from(t.end).ok()?,
-            ))
-        })
-        .collect();
+    let tokens = scan_positions(sql);
     let is_async = |i: usize| {
         tokens.get(i).is_some_and(|&(token, start, end)| {
             token == Token::Ident
@@ -411,6 +493,49 @@ mod tests {
             rewritten("ALTER TABLE t ADD COLUMN IF NOT EXISTS n decimal NOT NULL, ADD COLUMN k numeric(3)"),
             "ALTER TABLE t ADD COLUMN IF NOT EXISTS n decimal(18,6) NOT NULL, ADD COLUMN k numeric(3)"
         );
+    }
+
+    #[test]
+    fn include_columns_are_dropped_from_the_engine_text() {
+        assert_eq!(
+            rewritten("CREATE INDEX i ON t (c) INCLUDE (d, e)"),
+            "CREATE INDEX i ON t (c) "
+        );
+        assert_eq!(
+            rewritten("CREATE UNIQUE INDEX i ON t (c) INCLUDE (d) WHERE c > 0"),
+            "CREATE UNIQUE INDEX i ON t (c)  WHERE c > 0"
+        );
+        assert_eq!(
+            rewritten("CREATE INDEX i ON t USING btree ((lower(c)), d) include (\"x y\") "),
+            "CREATE INDEX i ON t USING btree ((lower(c)), d)  "
+        );
+        for sql in [
+            "CREATE INDEX i ON t (c)",
+            "CREATE INDEX i ON t (c) WHERE c = 'INCLUDE (d)'",
+            "CREATE TABLE t (include int)",
+            "SELECT 1 /* INCLUDE (d) */",
+        ] {
+            assert_eq!(rewritten(sql), sql);
+        }
+    }
+
+    #[test]
+    fn nulls_not_distinct_is_dropped_from_the_engine_text() {
+        assert_eq!(
+            rewritten("CREATE UNIQUE INDEX i ON t (c) NULLS NOT DISTINCT"),
+            "CREATE UNIQUE INDEX i ON t (c) "
+        );
+        assert_eq!(
+            rewritten("CREATE UNIQUE INDEX i ON t (c) nulls not distinct WHERE c > 0"),
+            "CREATE UNIQUE INDEX i ON t (c)  WHERE c > 0"
+        );
+        for sql in [
+            "CREATE UNIQUE INDEX i ON t (c) NULLS DISTINCT",
+            "CREATE INDEX i ON t (c DESC NULLS FIRST)",
+            "CREATE INDEX i ON t (c) WHERE c = 'NULLS NOT DISTINCT'",
+        ] {
+            assert_eq!(rewritten(sql), sql);
+        }
     }
 
     #[test]

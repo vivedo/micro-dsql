@@ -10,6 +10,7 @@ use std::time::{Duration, Instant};
 use crate::classify::{StatementClass, TxnControl};
 use crate::errors::{self, PolicyError};
 use crate::intercept::Intercept;
+use crate::jobs::JobAction;
 use crate::settings::{default_value, show_column, SessionSettings, SettingCommand};
 use crate::statement::StatementPlan;
 
@@ -59,7 +60,8 @@ pub enum Reply {
     Show { column: String, value: String },
     /// A command tag.
     Command { tag: &'static str },
-    /// Rows of typed columns (values in their text form) and the command tag.
+    /// Rows of typed columns (values in their text form) and the command tag, without a row
+    /// count: the wire layer appends the number of rows (`SELECT` becomes `SELECT 1`).
     Rows {
         tag: String,
         columns: Vec<ReplyColumn>,
@@ -180,6 +182,16 @@ impl SessionPolicy {
             if let Some(admission) = self.admit_setting(setting, status) {
                 return admission;
             }
+        }
+        if let Some(JobAction::MajorVersion { column }) = &plan.job {
+            return Admission::Respond(Reply::Rows {
+                tag: "SELECT".to_owned(),
+                columns: vec![ReplyColumn {
+                    name: column.clone(),
+                    ty: ColumnType::Int4,
+                }],
+                rows: vec![vec![Some("1".to_owned())]],
+            });
         }
         match &plan.intercept {
             Some(Intercept::Show { column, value }) => Admission::Respond(Reply::Show {
@@ -381,6 +393,42 @@ mod tests {
     }
 
     #[test]
+    fn major_version_is_answered_with_a_typed_row() {
+        let mut s = SessionPolicy::new(PolicyLimits::default());
+        let now = Instant::now();
+        for (sql, column) in [
+            ("SELECT sys.dsql_major_version()", "dsql_major_version"),
+            (
+                "SELECT * FROM sys.dsql_major_version()",
+                "dsql_major_version",
+            ),
+            ("SELECT sys.dsql_major_version() AS v", "v"),
+        ] {
+            let plan = StatementPlan::new(sql);
+            assert_eq!(
+                s.admit(&plan, TxnStatus::Idle, now),
+                Admission::Respond(Reply::Rows {
+                    tag: "SELECT".into(),
+                    columns: vec![ReplyColumn {
+                        name: column.into(),
+                        ty: ColumnType::Int4
+                    }],
+                    rows: vec![vec![Some("1".into())]],
+                }),
+                "{sql}"
+            );
+        }
+        // Inside a transaction it is still answered (it reads nothing).
+        s.complete(&StatementPlan::new("BEGIN"), 0, TxnStatus::Active, now)
+            .unwrap();
+        let plan = StatementPlan::new("SELECT sys.dsql_major_version()");
+        assert!(matches!(
+            s.admit(&plan, TxnStatus::Active, now),
+            Admission::Respond(Reply::Rows { .. })
+        ));
+    }
+
+    #[test]
     fn intercepts_are_answered_or_refused() {
         let mut s = SessionPolicy::new(PolicyLimits::default());
         let now = Instant::now();
@@ -491,7 +539,7 @@ mod tests {
         let mut s = begun(PolicyLimits::default(), now);
         step(&mut s, "INSERT INTO a VALUES (1)", 1, now).unwrap();
         assert_eq!(
-            refusal(step(&mut s, "CREATE INDEX i ON a (id)", 0, now)),
+            refusal(step(&mut s, "CREATE INDEX ASYNC i ON a (id)", 0, now)),
             "txn_ddl_dml"
         );
     }
@@ -725,11 +773,15 @@ mod tests {
             "txn_ddl_dml"
         );
         assert_eq!(
-            rule(&["INSERT INTO a VALUES (1)", "CREATE INDEX i ON a (id)"]),
+            rule(&["INSERT INTO a VALUES (1)", "CREATE INDEX ASYNC i ON a (id)"]),
             "txn_ddl_dml"
         );
         assert!(s
-            .check_batch(&plans(&["BEGIN", "CREATE INDEX i ON a (id)", "COMMIT"]))
+            .check_batch(&plans(&[
+                "BEGIN",
+                "CREATE INDEX ASYNC i ON a (id)",
+                "COMMIT"
+            ]))
             .is_ok());
         assert!(s.check_batch(&plans(&["SELECT 1", "SELECT 2"])).is_ok());
         assert!(s

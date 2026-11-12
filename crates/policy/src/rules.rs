@@ -86,7 +86,7 @@ fn persistence(node: &NodeEnum) -> Option<&str> {
 /// so the token stream is exact: string literals and comments are single tokens, which is why
 /// the rules that apply "anywhere in the statement" look at tokens instead of walking the
 /// tree (the library's node walker skips parts of it).
-fn tokens(sql: &str) -> Vec<(Token, &str)> {
+pub(crate) fn tokens(sql: &str) -> Vec<(Token, &str)> {
     let Ok(scanned) = pg_query::scan(sql) else {
         return Vec::new();
     };
@@ -302,7 +302,8 @@ mod tests {
     use super::*;
 
     fn check(sql: &str) -> Option<PolicyError> {
-        let parsed = pg_query::parse(sql).unwrap_or_else(|e| panic!("{sql}: {e}"));
+        let pre = crate::rewrite::pre_parse(sql);
+        let parsed = pg_query::parse(&pre.text).unwrap_or_else(|e| panic!("{sql}: {e}"));
         let node = parsed.protobuf.stmts[0]
             .stmt
             .as_ref()
@@ -310,7 +311,13 @@ mod tests {
             .node
             .as_ref()
             .unwrap();
-        check_rules(node, sql, &RuleContext::default())
+        check_rules(
+            node,
+            &pre.text,
+            &RuleContext {
+                async_kind: pre.async_kind,
+            },
+        )
     }
 
     /// (sql, rule id, SQLSTATE, message)
@@ -656,8 +663,8 @@ mod tests {
     fn statements_dsql_supports_are_not_refused() {
         for sql in [
             "CREATE DOMAIN d AS int",
-            "CREATE INDEX i ON t (id)",
-            "CREATE UNIQUE INDEX i ON t (id)",
+            "CREATE INDEX ASYNC i ON t (id)",
+            "CREATE UNIQUE INDEX ASYNC i ON t (id)",
             "SELECT * FROM t FOR UPDATE",
             "SELECT * FROM t FOR KEY SHARE",
             "SELECT ARRAY[1, 2]",

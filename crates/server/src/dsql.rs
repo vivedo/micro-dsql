@@ -68,7 +68,7 @@ pub(crate) fn run_planned(
 ) -> PgWireResult<Outcome> {
     let admission = lock(policy).admit(plan, txn_status(conn), Instant::now());
     match admission {
-        Admission::Run { sql } => match dispatch(conn, plan, sql, run_engine) {
+        Admission::Run { sql } => match dispatch(conn, plan, sql, format, run_engine) {
             Ok((outcome, rows)) => {
                 let result = lock(policy).complete(plan, rows, txn_status(conn), Instant::now());
                 match result {
@@ -107,10 +107,11 @@ fn dispatch(
     conn: &PgConnection,
     plan: &StatementPlan,
     sql: &str,
+    format: &Format,
     run_engine: impl FnOnce(&str) -> PgWireResult<(Outcome, u64)>,
 ) -> PgWireResult<(Outcome, u64)> {
     if plan.job.is_some() {
-        sys::run_job_statement(conn, plan, run_engine)
+        sys::run_job_statement(conn, plan, format, run_engine)
     } else if plan.ddl.is_some() || !plan.prelude.is_empty() {
         ddl::run_ddl_statement(conn, plan, run_engine)
     } else {

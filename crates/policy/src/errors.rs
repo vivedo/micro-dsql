@@ -244,6 +244,90 @@ fn find_word(sql: &str, word: &str) -> Option<usize> {
     None
 }
 
+// --- M3: DDL rules (contracts/rule-catalogue-m3.md) ---------------------------------------
+
+/// `0A000`: `CREATE INDEX CONCURRENTLY`.
+pub fn index_concurrently() -> PolicyError {
+    PolicyError::new(
+        "index_concurrently",
+        "0A000",
+        "CONCURRENTLY not supported for CREATE INDEX",
+    )
+}
+
+/// `0A000`: `CREATE INDEX` without `ASYNC`.
+pub fn index_sync() -> PolicyError {
+    PolicyError::new(
+        "index_sync",
+        "0A000",
+        "unsupported mode. please use CREATE INDEX ASYNC.",
+    )
+}
+
+/// `0A000`: an access method other than `btree`.
+pub fn index_method() -> PolicyError {
+    PolicyError::new(
+        "index_method",
+        "0A000",
+        "USING not supported for CREATE INDEX",
+    )
+}
+
+/// `54011`: more than eight key columns.
+pub fn index_key_columns() -> PolicyError {
+    PolicyError::new(
+        "index_key_columns",
+        "54011",
+        "more than 8 column keys in an index are not supported",
+    )
+}
+
+/// `42809`: `sys.wait_for_job` called from a query.
+pub fn wait_for_job_select() -> PolicyError {
+    PolicyError::new(
+        "wait_for_job_select",
+        "42809",
+        "sys.wait_for_job(text) is a procedure",
+    )
+}
+
+/// `0A000`: a subquery in the argument of `CALL sys.wait_for_job`.
+pub fn wait_for_job_subquery() -> PolicyError {
+    PolicyError::new(
+        "wait_for_job_subquery",
+        "0A000",
+        "cannot use subquery in CALL argument",
+    )
+}
+
+/// `22P02`: a job id that is not a job id.
+pub fn wait_for_job_id() -> PolicyError {
+    PolicyError::new("wait_for_job_id", "22P02", "Unable to convert text to UUID")
+}
+
+/// `22023`: a well-formed job id that `sys.jobs` does not have.
+pub fn wait_for_job_unknown(id: &str) -> PolicyError {
+    PolicyError::new(
+        "wait_for_job_unknown",
+        "22023",
+        format!("job {id} not found"),
+    )
+}
+
+/// `42501`: DML on a `sys` relation.
+pub fn sys_write(relation: &str) -> PolicyError {
+    PolicyError::new(
+        "sys_write",
+        "42501",
+        format!("permission denied for table {relation}"),
+    )
+}
+
+/// `42501`: DDL on the `sys` schema.
+pub fn sys_ddl() -> PolicyError {
+    PolicyError::new("sys_ddl", "42501", "permission denied for schema sys")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

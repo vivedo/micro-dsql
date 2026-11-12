@@ -5,7 +5,7 @@ use pg_query::NodeEnum;
 use crate::classify::{classify, StatementClass};
 use crate::errors::PolicyError;
 use crate::intercept::{intercept_node, Intercept};
-use crate::jobs::{DdlAction, JobAction};
+use crate::jobs::{job_action, DdlAction, JobAction};
 use crate::rewrite::{apply_edits, ast_rewrites, pre_parse, AsyncKind};
 use crate::rules::{check_rules, RuleContext};
 use crate::session::{ColumnType, ReplyColumn};
@@ -62,7 +62,8 @@ impl StatementPlan {
             ddl: None,
         };
         let Ok(parsed) = pg_query::parse(&text) else {
-            return plan(sql.to_owned(), true);
+            // The engine reports the syntax error, on the text with `ASYNC` blanked.
+            return plan(text.into_owned(), true);
         };
         let [raw] = parsed.protobuf.stmts.as_slice() else {
             return plan(text.into_owned(), false);
@@ -84,6 +85,7 @@ impl StatementPlan {
             setting,
             intercept: intercept_node(node),
             values_rows: values_rows(node),
+            job: job_action(node, async_kind),
             ..plan(String::new(), false)
         };
         // A refused statement never reaches the server's dispatch.
@@ -162,6 +164,9 @@ mod tests {
 
     #[test]
     fn unparsable_text_is_left_to_the_engine() {
+        let plan = StatementPlan::new("CREATE INDEX ASYNC public.i ON t (c)");
+        assert!(plan.parse_failed);
+        assert_eq!(plan.engine_sql, "CREATE INDEX       public.i ON t (c)");
         let plan = StatementPlan::new("SELEC 1");
         assert!(plan.parse_failed);
         assert_eq!(plan.engine_sql, "SELEC 1");
