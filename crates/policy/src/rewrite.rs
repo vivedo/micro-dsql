@@ -46,7 +46,53 @@ pub const REWRITES: &[(&str, Rewrite)] = &[
     ("bare_numeric", bare_numeric),
     ("index_include", index_include),
     ("index_nulls_not_distinct", index_nulls_not_distinct),
+    ("cache_one", cache_one),
 ];
+
+/// `CACHE n` (n >= 65536) of `CREATE SEQUENCE` becomes `CACHE 1`: the engine's sequences do not
+/// cache, so the value has no effect there (the rules already refused 2..65535). `ALTER SEQUENCE
+/// ... CACHE n` is not supported by the engine in any form; the clause becomes `OWNED BY NONE`,
+/// which it accepts and which changes nothing.
+fn cache_one(node: &NodeEnum, sql: &str) -> Vec<TextEdit> {
+    let options = match node {
+        NodeEnum::CreateSeqStmt(s) => &s.options,
+        NodeEnum::AlterSeqStmt(s) => &s.options,
+        _ => return Vec::new(),
+    };
+    let Some(cache) = crate::identity::seq_option(options, "cache") else {
+        return Vec::new();
+    };
+    let alter = matches!(node, NodeEnum::AlterSeqStmt(_));
+    let big = crate::identity::numeric_text(cache)
+        .and_then(|v| v.parse::<i128>().ok())
+        .is_some_and(|v| v >= 65536);
+    let Ok(at) = usize::try_from(cache.location) else {
+        return Vec::new();
+    };
+    if !big && !alter {
+        return Vec::new();
+    }
+    let tokens = scan_positions(sql);
+    let Some(keyword) = tokens.iter().position(|t| t.1 == at && t.0 == Token::Cache) else {
+        return Vec::new();
+    };
+    tokens
+        .get(keyword + 1)
+        .map(|value| match alter {
+            true => TextEdit {
+                at,
+                remove: value.2 - at,
+                insert: "OWNED BY NONE".to_owned(),
+            },
+            false => TextEdit {
+                at: value.1,
+                remove: value.2 - value.1,
+                insert: "1".to_owned(),
+            },
+        })
+        .into_iter()
+        .collect()
+}
 
 /// `CREATE UNIQUE INDEX ... NULLS NOT DISTINCT`: the engine does not have it, so the clause is
 /// removed (known gap: NULLs stay distinct).
@@ -160,7 +206,7 @@ fn bare_numeric(node: &NodeEnum, sql: &str) -> Vec<TextEdit> {
 }
 
 /// The tokens of `sql` with their byte ranges (empty when the scanner fails).
-fn scan_positions(sql: &str) -> Vec<(Token, usize, usize)> {
+pub(crate) fn scan_positions(sql: &str) -> Vec<(Token, usize, usize)> {
     let Ok(scanned) = pg_query::scan(sql) else {
         return Vec::new();
     };
@@ -514,6 +560,35 @@ mod tests {
             "CREATE INDEX i ON t (c) WHERE c = 'INCLUDE (d)'",
             "CREATE TABLE t (include int)",
             "SELECT 1 /* INCLUDE (d) */",
+        ] {
+            assert_eq!(rewritten(sql), sql);
+        }
+    }
+
+    #[test]
+    fn cache_becomes_one() {
+        assert_eq!(
+            rewritten("CREATE SEQUENCE s CACHE 65536"),
+            "CREATE SEQUENCE s CACHE 1"
+        );
+        assert_eq!(
+            rewritten("CREATE SEQUENCE s INCREMENT BY 2 cache 1000000 START 5"),
+            "CREATE SEQUENCE s INCREMENT BY 2 cache 1 START 5"
+        );
+        // The engine cannot alter a sequence's cache at all; the clause becomes a no-op option.
+        assert_eq!(
+            rewritten("ALTER SEQUENCE s CACHE 70000"),
+            "ALTER SEQUENCE s OWNED BY NONE"
+        );
+        assert_eq!(
+            rewritten("ALTER SEQUENCE s CACHE 1"),
+            "ALTER SEQUENCE s OWNED BY NONE"
+        );
+        for sql in [
+            "CREATE SEQUENCE s CACHE 1",
+            "CREATE SEQUENCE s START 65536",
+            "ALTER SEQUENCE s RESTART",
+            "SELECT 'CACHE 65536'",
         ] {
             assert_eq!(rewritten(sql), sql);
         }

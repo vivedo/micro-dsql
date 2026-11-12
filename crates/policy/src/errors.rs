@@ -282,6 +282,40 @@ pub fn index_key_columns() -> PolicyError {
     )
 }
 
+/// `0A000`: an identity column that is not `bigint` (`ty` as PostgreSQL displays it).
+pub fn identity_type(ty: &str) -> PolicyError {
+    PolicyError::new(
+        "identity_type",
+        "0A000",
+        format!("datatype {ty} not supported, identity column type must be bigint"),
+    )
+}
+
+/// `0A000`: an identity column without an explicit CACHE.
+pub fn identity_cache_missing() -> PolicyError {
+    PolicyError::new(
+        "identity_cache_missing",
+        "0A000",
+        "identity column is not supported without an explicit cache size. please define CACHE \
+         greater than or equal to 65536 or equal to 1",
+    )
+}
+
+/// `0A000`: `CREATE SEQUENCE` without an explicit CACHE.
+pub fn sequence_cache_missing() -> PolicyError {
+    PolicyError::new(
+        "sequence_cache_missing",
+        "0A000",
+        "CREATE SEQUENCE is not supported without an explicit cache size. please define CACHE \
+         greater than or equal to 65536 or equal to 1",
+    )
+}
+
+/// `0A000`: a CACHE value between 2 and 65535 (or below 1).
+pub fn cache_value() -> PolicyError {
+    PolicyError::new("cache_value", "0A000", "CACHE must be 1 or at least 65536")
+}
+
 /// `42809`: `sys.wait_for_job` called from a query.
 pub fn wait_for_job_select() -> PolicyError {
     PolicyError::new(

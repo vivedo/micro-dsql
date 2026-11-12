@@ -38,7 +38,7 @@ pub use errors::{
     PolicyError, ShapedError,
 };
 pub use intercept::{intercept, Intercept};
-pub use jobs::{DdlAction, JobAction};
+pub use jobs::{DdlAction, JobAction, TableRef};
 pub use params::{analyze, ParamHint, ResultHint, StatementShape};
 pub use session::{
     Admission, ColumnType, PolicyLimits, Reply, ReplyColumn, SessionPolicy, TxnState, TxnStatus,

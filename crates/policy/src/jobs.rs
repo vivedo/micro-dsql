@@ -4,7 +4,7 @@
 //! Nothing here knows about the engine; the server supplies the random bits of a job id and
 //! runs what the plan describes.
 
-use pg_query::protobuf::AlterTableType;
+use pg_query::protobuf::{AlterTableType, ObjectType};
 use pg_query::NodeEnum;
 
 use crate::ddl_rules;
@@ -70,6 +70,13 @@ pub enum NotValidKind {
     },
 }
 
+/// A table named in a statement, schema as written.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TableRef {
+    pub schema: Option<String>,
+    pub name: String,
+}
+
 /// DDL the server runs with extra work around the engine statement.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DdlAction {
@@ -81,10 +88,7 @@ pub enum DdlAction {
         kind: NotValidKind,
     },
     /// `DROP TABLE`: the identity sequences of the tables are dropped with them.
-    DropTable {
-        schema: Option<String>,
-        tables: Vec<String>,
-    },
+    DropTable { tables: Vec<TableRef> },
     /// `ALTER TABLE ... DROP COLUMN`: refused when the column is part of the primary key.
     DropColumn {
         schema: Option<String>,
@@ -162,6 +166,38 @@ pub fn job_action(node: &NodeEnum, async_kind: Option<AsyncKind>) -> Option<JobA
             Some(JobAction::WaitForJob { id })
         }
         NodeEnum::SelectStmt(select) => major_version(select),
+        _ => None,
+    }
+}
+
+/// The [`DdlAction`] of a statement, if any.
+pub fn ddl_action(node: &NodeEnum) -> Option<DdlAction> {
+    match node {
+        NodeEnum::DropStmt(drop) if drop.remove_type == ObjectType::ObjectTable as i32 => {
+            let tables = drop
+                .objects
+                .iter()
+                .filter_map(|object| {
+                    let Some(NodeEnum::List(list)) = object.node.as_ref() else {
+                        return None;
+                    };
+                    let names: Vec<&str> =
+                        list.items.iter().filter_map(ddl_rules::name_part).collect();
+                    match names.as_slice() {
+                        [name] => Some(TableRef {
+                            schema: None,
+                            name: (*name).to_owned(),
+                        }),
+                        [schema, name] => Some(TableRef {
+                            schema: Some((*schema).to_owned()),
+                            name: (*name).to_owned(),
+                        }),
+                        _ => None,
+                    }
+                })
+                .collect::<Vec<_>>();
+            (!tables.is_empty()).then_some(DdlAction::DropTable { tables })
+        }
         _ => None,
     }
 }
@@ -257,6 +293,36 @@ mod tests {
 
     fn some(text: &str) -> Option<String> {
         Some(text.to_owned())
+    }
+
+    fn ddl(sql: &str) -> Option<DdlAction> {
+        StatementPlan::new(sql).ddl
+    }
+
+    fn table(schema: Option<&str>, name: &str) -> TableRef {
+        TableRef {
+            schema: schema.map(str::to_owned),
+            name: name.to_owned(),
+        }
+    }
+
+    #[test]
+    fn drop_table_extraction() {
+        assert_eq!(
+            ddl("DROP TABLE a"),
+            Some(DdlAction::DropTable {
+                tables: vec![table(None, "a")]
+            })
+        );
+        assert_eq!(
+            ddl("DROP TABLE IF EXISTS a, s.\"B b\" CASCADE"),
+            Some(DdlAction::DropTable {
+                tables: vec![table(None, "a"), table(Some("s"), "B b")]
+            })
+        );
+        assert_eq!(ddl("DROP INDEX i"), None);
+        assert_eq!(ddl("DROP SEQUENCE s"), None);
+        assert_eq!(ddl("DROP VIEW v"), None);
     }
 
     #[test]

@@ -792,7 +792,7 @@ async fn supported_statements_are_not_refused() {
             format!("CREATE TABLE sup_{n} (id int PRIMARY KEY, n numeric(10,2), j jsonb, u uuid, tz timetz, i interval, b bytea, t timestamptz, txt text)"),
             format!("ALTER TABLE sup_{n} ADD COLUMN extra int"),
             format!("CREATE VIEW view_{n} AS SELECT 1 AS a"),
-            format!("CREATE SEQUENCE seq_{n}"),
+            format!("CREATE SEQUENCE seq_{n} CACHE 1"),
         ] {
             if let Err(err) = proto.run(&c, &sql).await {
                 // The engine may have its own opinion; a rule of ours must not.

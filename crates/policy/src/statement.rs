@@ -4,8 +4,9 @@ use pg_query::NodeEnum;
 
 use crate::classify::{classify, StatementClass};
 use crate::errors::PolicyError;
+use crate::identity::desugar;
 use crate::intercept::{intercept_node, Intercept};
-use crate::jobs::{job_action, DdlAction, JobAction};
+use crate::jobs::{ddl_action, job_action, DdlAction, JobAction};
 use crate::rewrite::{apply_edits, ast_rewrites, pre_parse, AsyncKind};
 use crate::rules::{check_rules, RuleContext};
 use crate::session::{ColumnType, ReplyColumn};
@@ -71,7 +72,9 @@ impl StatementPlan {
         let Some(node) = raw.stmt.as_ref().and_then(|n| n.node.as_ref()) else {
             return plan(text.into_owned(), false);
         };
-        let edits = ast_rewrites(node, &text);
+        let mut edits = ast_rewrites(node, &text);
+        let identity = desugar(node, &text);
+        edits.extend(identity.edits);
         // Stateless refusals: deny rules first, then the settings whitelist.
         let (setting, setting_refusal) = match SettingCommand::from_ast(node) {
             Ok(setting) => (setting, check_set_config(&text)),
@@ -86,6 +89,9 @@ impl StatementPlan {
             intercept: intercept_node(node),
             values_rows: values_rows(node),
             job: job_action(node, async_kind),
+            ddl: ddl_action(node),
+            prelude: identity.prelude,
+            cleanup_on_failure: identity.cleanup,
             ..plan(String::new(), false)
         };
         // A refused statement never reaches the server's dispatch.
