@@ -40,18 +40,24 @@
 //   parameters are decoded (B2); result type OIDs and binary result encodings are fixed
 //   for common types (B3, `binary.rs`);
 // - parameter decoding errors use PostgreSQL SQLSTATEs (22P02/22P03) instead of XX000;
+// - DSQL policy layer (M2): every statement runs through `dsql::run_planned` (rules,
+//   transaction discipline and limits, SET whitelist, DDL rewrites from the `micro-dsql-policy`
+//   crate); engine conflicts and lock contention are sent as DSQL's 40001 OC000/OC001 errors
+//   (`55P03` is mapped to OC000 until autocommit runs as a transaction); errors raised by the
+//   policy carry their own SQLSTATE, message and DETAIL;
 // - the upstream unit tests (which need Turso's internal test client) are not carried
 //   over; crates/server/tests/smoke covers the behaviour.
 
 mod binary;
 mod conn;
+mod dsql;
 mod startup;
 
 use std::fmt::Debug;
 use std::net::SocketAddr;
 use std::num::NonZero;
 use std::path::PathBuf;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
 use bytes::Bytes;
@@ -65,7 +71,10 @@ use turso_pg_parser::copy::{parse_copy_to_stdout, CopyToStdout};
 use turso_pg_parser::ParseResult;
 
 use micro_dsql_policy::params::Column;
-use micro_dsql_policy::{Intercept, ParamHint, ResultHint};
+use micro_dsql_policy::{
+    Intercept, ParamHint, PolicyError, PolicyLimits, ResultHint, SessionPolicy, StatementPlan,
+    TxnStatus,
+};
 
 use pgwire::api::portal::{Format, Portal};
 use pgwire::api::query::{
@@ -154,22 +163,43 @@ pub fn open_database(storage: &Storage) -> anyhow::Result<Arc<Database>> {
     Ok(db)
 }
 
+/// Options of a micro-dsql server.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct ServerOptions {
+    /// Transaction limits (the defaults are DSQL's: 3,000 rows, 300 s). Tests lower them.
+    pub limits: PolicyLimits,
+}
+
 /// A bound micro-dsql server.
 pub struct Server {
     listener: TcpListener,
     db: Arc<Database>,
+    options: ServerOptions,
 }
 
 impl Server {
     /// Opens the database and binds the listener. With port 0 the OS picks the port; read it
     /// back with [`Server::local_addr`].
     pub async fn bind(address: &str, storage: &Storage) -> anyhow::Result<Self> {
+        Self::bind_with(address, storage, ServerOptions::default()).await
+    }
+
+    /// Like [`Server::bind`], with explicit options.
+    pub async fn bind_with(
+        address: &str,
+        storage: &Storage,
+        options: ServerOptions,
+    ) -> anyhow::Result<Self> {
         let storage = storage.clone();
         let db = tokio::task::spawn_blocking(move || open_database(&storage)).await??;
         let listener = TcpListener::bind(address)
             .await
             .map_err(|e| anyhow::anyhow!("cannot listen on {address}: {e}"))?;
-        Ok(Self { listener, db })
+        Ok(Self {
+            listener,
+            db,
+            options,
+        })
     }
 
     /// The address the server is listening on.
@@ -192,8 +222,9 @@ impl Server {
                         Ok((socket, addr)) => {
                             debug!("client connected from {addr}");
                             let db = self.db.clone();
+                            let limits = self.options.limits;
                             connections.spawn(async move {
-                                if let Err(e) = serve_connection(socket, db).await {
+                                if let Err(e) = serve_connection(socket, db, limits).await {
                                     error!("error processing connection from {addr}: {e}");
                                 }
                                 debug!("client {addr} disconnected");
@@ -216,7 +247,11 @@ impl Server {
     }
 }
 
-async fn serve_connection(socket: tokio::net::TcpStream, db: Arc<Database>) -> anyhow::Result<()> {
+async fn serve_connection(
+    socket: tokio::net::TcpStream,
+    db: Arc<Database>,
+    limits: PolicyLimits,
+) -> anyhow::Result<()> {
     let session = tokio::task::spawn_blocking(move || -> turso_pg::Result<PgConnection> {
         let session = PgConnection::connect_with(&db, ConnectOpts::new())?;
         // PostgreSQL always enforces foreign keys; Turso's SQLite heritage keeps them off
@@ -227,6 +262,7 @@ async fn serve_connection(socket: tokio::net::TcpStream, db: Arc<Database>) -> a
     .await??;
     let handler = Arc::new(TursoPgHandler {
         conn: session.clone(),
+        policy: Arc::new(Mutex::new(SessionPolicy::new(limits))),
         query_parser: Arc::new(TursoQueryParser {
             conn: session.clone(),
         }),
@@ -258,11 +294,11 @@ where
 /// A prepared statement as stored by the extended protocol.
 #[derive(Debug, Clone)]
 pub struct PgStatement {
-    sql: String,
+    /// The policy's view of the statement: rules, class, text for the engine.
+    plan: Arc<StatementPlan>,
     /// One per parameter: the client-declared type, else the inferred one; `None` when
     /// nothing is known (described as `text`, bound by guessing from the value).
     param_types: Vec<Option<Type>>,
-    intercept: Option<Intercept>,
     result_hints: Vec<Option<ResultHint>>,
 }
 
@@ -280,19 +316,18 @@ impl PgStatement {
             })
             .collect();
         Self {
-            intercept: micro_dsql_policy::intercept(&sql),
+            plan: Arc::new(StatementPlan::new(&sql)),
             result_hints: shape.results,
             param_types,
-            sql,
         }
     }
 
-    /// The intercept to apply now: none inside a failed transaction block, so the engine
+    /// The intercept to describe now: none inside a failed transaction block, so the engine
     /// answers 25P02 like for any other statement.
     fn active_intercept(&self, conn: &PgConnection) -> Option<&Intercept> {
         match conn.transaction_state() {
             TransactionState::Aborted => None,
-            _ => self.intercept.as_ref(),
+            _ => self.plan.intercept.as_ref(),
         }
     }
 }
@@ -325,6 +360,8 @@ impl QueryParser for TursoQueryParser {
 
 struct TursoPgHandler {
     conn: PgConnection,
+    /// Policy state of this connection; locked only inside blocking closures.
+    policy: Arc<Mutex<SessionPolicy>>,
     query_parser: Arc<TursoQueryParser>,
 }
 
@@ -394,14 +431,16 @@ impl SimpleQueryHandler for TursoPgHandler {
         PgWireError: From<<C as Sink<PgWireBackendMessage>>::Error>,
     {
         let conn = self.conn.clone();
+        let policy = self.policy.clone();
         let query = query.to_owned();
         blocking(move || {
             // Per the PostgreSQL simple query protocol, a query string may contain
             // multiple semicolon-separated statements. Split and execute each one.
             let statements = turso_pg::split_statements(&query).map_err(pg_error)?;
-            statements
+            let plans = plan_statements(&conn, &policy, &statements)?;
+            plans
                 .iter()
-                .map(|sql| run_simple_statement(&conn, sql).map(Outcome::into_response))
+                .map(|plan| run_simple_statement(&conn, &policy, plan).map(Outcome::into_response))
                 .collect()
         })
         .await
@@ -420,8 +459,9 @@ impl TursoPgHandler {
         }
         client.set_state(PgWireConnectionState::QueryInProgress);
         let conn = self.conn.clone();
+        let policy = self.policy.clone();
         let text = query.query;
-        let statements = blocking(move || {
+        let plans = blocking(move || {
             // Errors raised here never reach PgConnection::prepare, so report
             // them to the session: any error inside a transaction block aborts
             // the block.
@@ -430,19 +470,21 @@ impl TursoPgHandler {
                 pg_error(turso_core::LimboError::ParseError(error.to_string()).into())
             };
             turso_pg_parser::parse(&text).map_err(parse_error)?;
-            turso_pg_parser::split_statements(&text).map_err(parse_error)
+            let statements = turso_pg_parser::split_statements(&text).map_err(parse_error)?;
+            plan_statements(&conn, &policy, &statements)
         })
         .await?;
-        if statements.is_empty() {
+        if plans.is_empty() {
             client
                 .feed(PgWireBackendMessage::EmptyQueryResponse(
                     EmptyQueryResponse::new(),
                 ))
                 .await?;
         }
-        for sql in statements {
+        for plan in plans {
             let conn = self.conn.clone();
-            let outcome = blocking(move || run_simple_statement(&conn, &sql)).await?;
+            let policy = self.policy.clone();
+            let outcome = blocking(move || run_simple_statement(&conn, &policy, &plan)).await?;
             match outcome {
                 Outcome::Copy {
                     column_count,
@@ -464,61 +506,51 @@ impl TursoPgHandler {
     }
 }
 
-/// Runs one statement of a simple query (blocking).
-fn run_simple_statement(conn: &PgConnection, sql: &str) -> PgWireResult<Outcome> {
-    if conn.transaction_state() != TransactionState::Aborted {
-        if let Some(intercept) = micro_dsql_policy::intercept(sql) {
-            return run_intercept(conn, &intercept, &Format::UnifiedText);
-        }
+/// Plans every statement of a simple query; a string of several statements is checked as one
+/// implicit transaction before any of them runs (blocking).
+fn plan_statements(
+    conn: &PgConnection,
+    policy: &Mutex<SessionPolicy>,
+    statements: &[String],
+) -> PgWireResult<Vec<StatementPlan>> {
+    let plans: Vec<StatementPlan> = statements
+        .iter()
+        .map(|sql| StatementPlan::new(sql))
+        .collect();
+    if plans.len() > 1 && dsql::txn_status(conn) == TxnStatus::Idle {
+        let result = policy
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .check_batch(&plans);
+        result.map_err(dsql::policy_error)?;
     }
-    let copy = parse_copy_to_stdout(sql).map_err(|error| {
-        conn.abort_transaction_block_on_error();
-        pg_error(turso_core::LimboError::ParseError(error.to_string()).into())
-    })?;
-    if let Some(copy) = copy {
-        return copy_to_stdout(conn, &copy);
-    }
-    let mut stmt = conn.prepare(sql).map_err(pg_error)?;
-    let parsed = parse_statement(sql)?;
-    if stmt.result_kind() != StatementResultKind::Rows {
-        execute_non_query(&mut stmt, &parsed)
-    } else {
-        let hints = micro_dsql_policy::analyze(sql).results;
-        let header = Arc::new(build_field_info(&stmt, &Format::UnifiedText, &hints));
-        execute_query(&mut stmt, header)
-    }
+    Ok(plans)
 }
 
-/// Answers an intercepted statement (blocking).
-fn run_intercept(
+/// Runs one statement of a simple query (blocking).
+fn run_simple_statement(
     conn: &PgConnection,
-    intercept: &Intercept,
-    format: &Format,
+    policy: &Mutex<SessionPolicy>,
+    plan: &StatementPlan,
 ) -> PgWireResult<Outcome> {
-    match intercept {
-        Intercept::Show { column, value } => {
-            let header = Arc::new(show_fields(column, format));
-            let mut encoder = DataRowEncoder::new(header.clone());
-            encoder.encode_field(value)?;
-            Ok(Outcome::Rows {
-                header,
-                rows: vec![encoder.finish()],
-            })
-        }
-        Intercept::SetNoop { tag } => Ok(Outcome::Command(Tag::new(tag))),
-        Intercept::Deallocate { name } => Ok(Outcome::Command(Tag::new(if name.is_some() {
-            "DEALLOCATE"
-        } else {
-            "DEALLOCATE ALL"
-        }))),
-        Intercept::Error { sqlstate, message } => {
+    dsql::run_planned(conn, policy, plan, &Format::UnifiedText, |sql| {
+        let copy = parse_copy_to_stdout(sql).map_err(|error| {
             conn.abort_transaction_block_on_error();
-            Err(PgWireError::ApiError(Box::new(SqlError {
-                sqlstate,
-                message: message.clone(),
-            })))
+            pg_error(turso_core::LimboError::ParseError(error.to_string()).into())
+        })?;
+        if let Some(copy) = copy {
+            return copy_to_stdout(conn, &copy).map(|outcome| (outcome, 0));
         }
-    }
+        let mut stmt = conn.prepare(sql).map_err(pg_error)?;
+        let parsed = parse_statement(sql)?;
+        if stmt.result_kind() != StatementResultKind::Rows {
+            execute_non_query(&mut stmt, &parsed)
+        } else {
+            let hints = micro_dsql_policy::analyze(sql).results;
+            let header = Arc::new(build_field_info(&stmt, &Format::UnifiedText, &hints));
+            execute_query(&mut stmt, header)
+        }
+    })
 }
 
 fn show_fields(column: &str, format: &Format) -> Vec<FieldInfo> {
@@ -610,7 +642,7 @@ impl ExtendedQueryHandler for TursoPgHandler {
         let sql = client
             .portal_store()
             .get_portal(message.name.as_deref().unwrap_or(pgwire::api::DEFAULT_NAME))
-            .map(|portal| portal.statement.statement.sql.clone());
+            .map(|portal| portal.statement.statement.plan.original.clone());
         let result = self._on_execute(client, message).await;
         let status = wire_transaction_status(&self.conn);
         finish_query(client, result, true, status, sql.as_deref()).await
@@ -645,33 +677,33 @@ impl ExtendedQueryHandler for TursoPgHandler {
         PgWireError: From<<C as Sink<PgWireBackendMessage>>::Error>,
     {
         let conn = self.conn.clone();
+        let policy = self.policy.clone();
         let statement = portal.statement.statement.clone();
         let parameters = portal.parameters.clone();
         let parameter_format = portal.parameter_format.clone();
         let result_format = portal.result_column_format.clone();
         blocking(move || {
-            if let Some(intercept) = statement.active_intercept(&conn) {
-                return run_intercept(&conn, intercept, &result_format).map(Outcome::into_response);
-            }
-            let query = &statement.sql;
-            let mut stmt = conn.prepare(query).map_err(pg_error)?;
+            let plan = statement.plan.clone();
+            dsql::run_planned(&conn, &policy, &plan, &result_format, |sql| {
+                let mut stmt = conn.prepare(sql).map_err(pg_error)?;
 
-            // Bind parameters from the portal
-            bind_portal_parameters(&mut stmt, &statement, &parameters, &parameter_format)?;
+                // Bind parameters from the portal
+                bind_portal_parameters(&mut stmt, &statement, &parameters, &parameter_format)?;
 
-            let parsed = parse_statement(query)?;
-            if stmt.result_kind() != StatementResultKind::Rows {
-                return execute_non_query(&mut stmt, &parsed)
-                    .map(Outcome::into_response)
-                    .map(|response| with_transaction_state(&conn, response));
-            }
+                let parsed = parse_statement(sql)?;
+                if stmt.result_kind() != StatementResultKind::Rows {
+                    return execute_non_query(&mut stmt, &parsed);
+                }
 
-            let header = Arc::new(build_field_info(
-                &stmt,
-                &result_format,
-                &statement.result_hints,
-            ));
-            execute_query(&mut stmt, header).map(Outcome::into_response)
+                let header = Arc::new(build_field_info(
+                    &stmt,
+                    &result_format,
+                    &statement.result_hints,
+                ));
+                execute_query(&mut stmt, header)
+            })
+            .map(Outcome::into_response)
+            .map(|response| with_transaction_state(&conn, response))
         })
         .await
     }
@@ -730,7 +762,7 @@ fn describe(
         Some(Intercept::Show { column, .. }) => Ok(show_fields(column, format)),
         Some(_) => Ok(vec![]),
         None => {
-            let stmt = conn.prepare(&statement.sql).map_err(pg_error)?;
+            let stmt = conn.prepare(&statement.plan.engine_sql).map_err(pg_error)?;
             Ok(describe_fields(&stmt, format, &statement.result_hints))
         }
     }
@@ -943,7 +975,7 @@ fn scalar_pg_type_to_array_type(scalar: &Type) -> Type {
 fn execute_query(
     stmt: &mut turso_pg::Statement,
     header: Arc<Vec<FieldInfo>>,
-) -> PgWireResult<Outcome> {
+) -> PgWireResult<(Outcome, u64)> {
     let mut rows: Vec<PgWireResult<DataRow>> = Vec::new();
     let header_clone = header.clone();
 
@@ -961,14 +993,15 @@ fn execute_query(
     })
     .map_err(pg_error)?;
 
-    Ok(Outcome::Rows { header, rows })
+    let changed = u64::try_from(stmt.n_change()).unwrap_or(0);
+    Ok((Outcome::Rows { header, rows }, changed))
 }
 
 /// Execute a non-SELECT statement and build its command tag.
 fn execute_non_query(
     stmt: &mut turso_pg::Statement,
     parsed: &ParseResult,
-) -> PgWireResult<Outcome> {
+) -> PgWireResult<(Outcome, u64)> {
     stmt.run_ignore_rows().map_err(pg_error)?;
 
     let affected = stmt.n_change() as usize;
@@ -978,7 +1011,7 @@ fn execute_non_query(
         Some(tag) => Tag::new(tag),
         None => wire_tag(CommandTag::of(parsed), affected),
     };
-    Ok(Outcome::Command(tag))
+    Ok((Outcome::Command(tag), u64::try_from(affected).unwrap_or(0)))
 }
 
 fn wire_tag(tag: CommandTag, affected_rows: usize) -> Tag {
@@ -1313,21 +1346,6 @@ fn error_info_code(sqlstate: &str, message: &str) -> ErrorInfo {
     )
 }
 
-/// An error raised by micro-dsql itself (not by the engine), sent like engine errors.
-#[derive(Debug)]
-struct SqlError {
-    sqlstate: &'static str,
-    message: String,
-}
-
-impl std::fmt::Display for SqlError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}: {}", self.sqlstate, self.message)
-    }
-}
-
-impl std::error::Error for SqlError {}
-
 /// ErrorResponse fields are NUL-terminated strings, so a NUL inside a value
 /// would end the field early and the client would read the rest as more
 /// fields. PostgreSQL fills these fields from C strings, which also end at
@@ -1360,23 +1378,26 @@ where
     };
     let fields = match error.downcast::<turso_pg::Error>() {
         Ok(error) => {
-            // Reshape the engine's message like PostgreSQL's (micro-dsql addition).
-            let shaped = micro_dsql_policy::shape_error(
+            // Engine conflicts become DSQL's errors; the rest is reshaped like PostgreSQL's
+            // (micro-dsql additions).
+            let shaped = micro_dsql_policy::shape_engine_error(
+                dsql::engine_failure(&error),
                 error.sqlstate,
                 &error.message,
+                error.detail.as_deref(),
                 error.table_name.is_some(),
                 sql.unwrap_or_default(),
             );
             let mut fields = vec![
                 (b'S', "ERROR".to_string()),
-                (b'C', error.sqlstate.to_string()),
+                (b'C', shaped.sqlstate.clone()),
                 (b'M', error_field_value(&shaped.message)),
             ];
             if let (Some(position), Some(_)) = (shaped.position, sql) {
                 fields.push((b'P', position.to_string()));
             }
             for (tag, value) in [
-                (b'D', &error.detail),
+                (b'D', &shaped.detail),
                 (b's', &shaped.schema),
                 (b't', &error.table_name),
                 (b'c', &error.column_name),
@@ -1388,12 +1409,18 @@ where
             }
             fields
         }
-        Err(error) => match error.downcast::<SqlError>() {
-            Ok(error) => vec![
-                (b'S', "ERROR".to_string()),
-                (b'C', error.sqlstate.to_string()),
-                (b'M', error_field_value(&error.message)),
-            ],
+        Err(error) => match error.downcast::<PolicyError>() {
+            Ok(error) => {
+                let mut fields = vec![
+                    (b'S', "ERROR".to_string()),
+                    (b'C', error.sqlstate.to_string()),
+                    (b'M', error_field_value(&error.message)),
+                ];
+                if let Some(detail) = &error.detail {
+                    fields.push((b'D', error_field_value(detail)));
+                }
+                fields
+            }
             Err(error) => return Err(PgWireError::ApiError(error)),
         },
     };
