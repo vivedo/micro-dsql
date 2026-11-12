@@ -162,4 +162,79 @@ mod tests {
             EngineFailure::Other
         );
     }
+
+    // FR-054: each refusal is logged once, at debug level, with the rule id.
+    mod refusal_log {
+        use std::io::Write;
+        use std::sync::{Arc, Mutex};
+
+        use micro_dsql_policy::{PolicyLimits, SessionPolicy, StatementPlan};
+        use pgwire::api::portal::Format;
+        use tracing_subscriber::fmt::MakeWriter;
+        use turso_core::ConnectOpts;
+
+        use crate::{open_database, Storage};
+
+        use super::*;
+
+        #[derive(Clone, Default)]
+        struct Captured(Arc<Mutex<Vec<u8>>>);
+
+        impl Write for Captured {
+            fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+                self.0.lock().unwrap().extend_from_slice(buf);
+                Ok(buf.len())
+            }
+            fn flush(&mut self) -> std::io::Result<()> {
+                Ok(())
+            }
+        }
+
+        impl<'a> MakeWriter<'a> for Captured {
+            type Writer = Captured;
+            fn make_writer(&'a self) -> Self::Writer {
+                self.clone()
+            }
+        }
+
+        fn refuse(level: tracing::Level, sqls: &[&str]) -> String {
+            let db = open_database(&Storage::Memory).unwrap();
+            let conn = PgConnection::connect_with(&db, ConnectOpts::new()).unwrap();
+            let policy = Mutex::new(SessionPolicy::new(PolicyLimits::default()));
+            let captured = Captured::default();
+            let subscriber = tracing_subscriber::fmt()
+                .with_max_level(level)
+                .with_ansi(false)
+                .with_writer(captured.clone())
+                .finish();
+            tracing::subscriber::with_default(subscriber, || {
+                for sql in sqls {
+                    let plan = StatementPlan::new(sql);
+                    let result = run_planned(&conn, &policy, &plan, &Format::UnifiedText, |_| {
+                        panic!("a refused statement must not reach the engine: {sql}")
+                    });
+                    assert!(result.is_err(), "{sql}");
+                }
+            });
+            let bytes = captured.0.lock().unwrap().clone();
+            String::from_utf8(bytes).unwrap()
+        }
+
+        #[test]
+        fn a_refusal_is_logged_once_at_debug_level_with_the_rule_id() {
+            let log = refuse(tracing::Level::DEBUG, &["TRUNCATE t"]);
+            assert_eq!(log.lines().count(), 1, "{log}");
+            assert!(log.contains("DEBUG"), "{log}");
+            assert!(log.contains("truncate"), "{log}");
+            let log = refuse(tracing::Level::DEBUG, &["TRUNCATE t", "SAVEPOINT a"]);
+            assert_eq!(log.lines().count(), 2, "{log}");
+            assert!(log.contains("savepoint"), "{log}");
+        }
+
+        #[test]
+        fn nothing_is_logged_at_info_level() {
+            let log = refuse(tracing::Level::INFO, &["TRUNCATE t", "SET work_mem = 1"]);
+            assert_eq!(log, "");
+        }
+    }
 }
