@@ -10,10 +10,10 @@
 ## Phase 1: Setup
 
 - [x] T001 Add `.venv/`, `node_modules/`, Go build output to `.gitignore`
-- [x] T002 Create `spike/env.sh` (PG* defaults, overridable) and `spike/README.md` (prerequisites, how to run)
-- [x] T003 [P] Create `spike/drivers/requirements.txt` (psycopg[binary], asyncpg) and install into `.venv`
-- [x] T004 [P] Create `spike/drivers/node/package.json` with `pg`, run `npm install` (commit lockfile)
-- [x] T005 [P] Create `spike/drivers/go/go.mod` with pgx v5, run `go mod tidy` (commit go.sum)
+- [x] T002 Create `research/spike/env.sh` (PG* defaults, overridable) and `research/spike/README.md` (prerequisites, how to run)
+- [x] T003 [P] Create `research/spike/drivers/requirements.txt` (psycopg[binary], asyncpg) and install into `.venv`
+- [x] T004 [P] Create `research/spike/drivers/node/package.json` with `pg`, run `npm install` (commit lockfile)
+- [x] T005 [P] Create `research/spike/drivers/go/go.mod` with pgx v5, run `go mod tidy` (commit go.sum)
 
 ## Phase 2: Foundational (blocking)
 
@@ -22,30 +22,30 @@
 
 ## Phase 3: User Story 1 — Build and connect (P1)
 
-- [x] T008 [US1] Create `spike/connect.sh`: SELECT 1, current_user, current_database(), SHOW server_version/timezone, arbitrary password
+- [x] T008 [US1] Create `research/spike/connect.sh`: SELECT 1, current_user, current_database(), SHOW server_version/timezone, arbitrary password
 
 ## Phase 4: User Story 2 — App SQL (P1)
 
-- [x] T009 [P] [US2] Write `spike/app/schema.sql` (5 tables, PK/FK, all listed types, indexes, seed data)
-- [x] T010 [P] [US2] Write `spike/app/queries.sql` (≥15 queries incl. joins, aggregates, ORDER BY/LIMIT, upsert, RETURNING, CTE, window, jsonb, timestamptz µs, uuid, numeric, int4 overflow probe)
-- [x] T011 [US2] Write `spike/app/run.sh` (psql -X -e, ON_ERROR_STOP 0, VERBOSITY verbose)
+- [x] T009 [P] [US2] Write `research/spike/app/schema.sql` (5 tables, PK/FK, all listed types, indexes, seed data)
+- [x] T010 [P] [US2] Write `research/spike/app/queries.sql` (≥15 queries incl. joins, aggregates, ORDER BY/LIMIT, upsert, RETURNING, CTE, window, jsonb, timestamptz µs, uuid, numeric, int4 overflow probe)
+- [x] T011 [US2] Write `research/spike/app/run.sh` (psql -X -e, ON_ERROR_STOP 0, VERBOSITY verbose)
 
 ## Phase 5: User Story 3 — Driver matrix (P1)
 
-- [x] T012 [P] [US3] `spike/drivers/psql.sh`
-- [x] T013 [P] [US3] `spike/drivers/psycopg_smoke.py`
-- [x] T014 [P] [US3] `spike/drivers/asyncpg_smoke.py`
-- [x] T015 [P] [US3] `spike/drivers/node/pg_smoke.js`
-- [x] T016 [P] [US3] `spike/drivers/go/main.go`
+- [x] T012 [P] [US3] `research/spike/drivers/psql.sh`
+- [x] T013 [P] [US3] `research/spike/drivers/psycopg_smoke.py`
+- [x] T014 [P] [US3] `research/spike/drivers/asyncpg_smoke.py`
+- [x] T015 [P] [US3] `research/spike/drivers/node/pg_smoke.js`
+- [x] T016 [P] [US3] `research/spike/drivers/go/main.go`
 
 ## Phase 6: User Story 4 — OCC (P1)
 
-- [x] T017 [US4] `spike/occ/occ.py`: same-row UPDATE, same-PK INSERT, write skew, autocommit storm, isolation-level probe, final-state checks, watchdog timeouts
+- [x] T017 [US4] `research/spike/occ/occ.py`: same-row UPDATE, same-PK INSERT, write skew, autocommit storm, isolation-level probe, final-state checks, watchdog timeouts
 
 ## Phase 7: User Story 5 — Findings (P1)
 
-- [x] T018 [US5] `spike/run-all.sh` running all of the above into `spike/results/*.txt`; run it against tursopg
-- [x] T019 [US5] Extra probes for research [I] items (int4 overflow, binary params, startup/timing, DSQL-rejected statements accepted by Turso) recorded in `spike/results/`
+- [x] T018 [US5] `research/spike/run-all.sh` running all of the above into `research/spike/results/*.txt`; run it against tursopg
+- [x] T019 [US5] Extra probes for research [I] items (int4 overflow, binary params, startup/timing, DSQL-rejected statements accepted by Turso) recorded in `research/spike/results/`
 - [x] T020 [US5] Write `research/06-spike-findings.md` (commit, toolchain, build, tables, [I] verdicts, go/no-go, blockers + effort)
 
 ## Phase 8: Polish
@@ -62,4 +62,4 @@ Hard-stop check first (T007), then scripts in parallel, one recorded run, then t
 
 ## Phase 9: Convergence
 
-- [x] T022 [US3] Conform `spike/app/run.sh`, `spike/drivers/psql.sh` and `spike/drivers/go/main.go` to `contracts/script-interface.md`: exit 1 when the server cannot be reached at all (today they exit 0) (partial: contract exit-code rule)
+- [x] T022 [US3] Conform `research/spike/app/run.sh`, `research/spike/drivers/psql.sh` and `research/spike/drivers/go/main.go` to `contracts/script-interface.md`: exit 1 when the server cannot be reached at all (today they exit 0) (partial: contract exit-code rule)

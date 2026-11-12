@@ -4,7 +4,7 @@ description = "Postgres wire server for micro-dsql, adapted from Turso's turso_p
 version.workspace = true
 edition.workspace = true
 publish.workspace = true
-# src/lib.rs is derived from MIT-licensed upstream code; see its header and LICENSES/turso-MIT.txt.
+# src/lib.rs is derived from MIT-licensed upstream code; see its header and crates/server/LICENSE-turso.
 license = "MIT"
 
 [dependencies]
@@ -23,7 +23,3 @@ micro-dsql-policy.workspace = true
 [dev-dependencies]
 tokio-postgres.workspace = true
 uuid.workspace = true
-
-[[test]]
-name = "smoke"
-path = "../../tests/smoke/main.rs"

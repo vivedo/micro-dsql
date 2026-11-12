@@ -8,7 +8,7 @@ close it. Blocker ids (B1–B14) refer to the M0 spike findings (research/06 §9
 all five T1 layer-1 scenarios pass against micro-dsql. The entries below are gaps without a
 failing test in the suite (probes and M0 findings), kept here so they are not forgotten.
 
-Fixed in M1 (with tests in `tests/smoke/`): B4 (Terminate closes the connection), B5 (foreign
+Fixed in M1 (with tests in `crates/server/tests/smoke/`): B4 (Terminate closes the connection), B5 (foreign
 keys enforced, `23503`, `ON DELETE CASCADE`), B9 except the items below, and most of B1–B3.
 
 | Id | Observed | Suspected cause | Milestone |
@@ -22,7 +22,7 @@ keys enforced, `23503`, `ON DELETE CASCADE`), B9 except the items below, and mos
 | B9 (rest) | `current_user`/`session_user` are `postgres` (DSQL: the login role, e.g. `admin`). With `--data <file>`, `current_database()` is the file's stem (only the default in-memory database is `postgres`). `SET timezone` accepts only UTC spellings (`22023` otherwise); other non-whitelisted `SET`s keep the engine's behaviour (e.g. `SET statement_timeout = 1000` → `22023`). | Engine roles and naming; the DSQL SET whitelist is M2 scope. | M2 |
 | B10 | Concurrent autocommit writes can fail with `55P03 Database is busy`. | Engine autocommit uses non-concurrent transactions. | M2 (map to 40001/OC000), M4 (fix) |
 | B11 | Any committed DDL aborts every concurrent writing transaction with `40001 Database schema conflict`. | Schema cookie is database-wide in the engine. | M4 / upstream |
-| B12 | `information_schema` missing; `GENERATED … AS IDENTITY`, sequence `CACHE 65536`, `ADD CONSTRAINT [NOT VALID]`, `ALTER COLUMN`, `CREATE INDEX ASYNC`, `FOR UPDATE`, `DELETE … USING` rejected. | Engine / DSQL-specific syntax. | M2–M4 (PLAN.md) |
+| B12 | `information_schema` missing; `GENERATED … AS IDENTITY`, sequence `CACHE 65536`, `ADD CONSTRAINT [NOT VALID]`, `ALTER COLUMN`, `CREATE INDEX ASYNC`, `FOR UPDATE`, `DELETE … USING` rejected. | Engine / DSQL-specific syntax. | M2–M4 (docs/plan.md) |
 | B13 | Accepted although DSQL rejects them: `TRUNCATE`, `SAVEPOINT`, `CREATE DOMAIN`, `CREATE TYPE … ENUM`, arrays, `serial`, `COPY … TO STDOUT`, DDL and DML in one transaction, two DDLs in one transaction. The DSQL-rule probes (`tests/psql/run.sh --probes`) all differ from the MiniStack reference (22 of 22). | No DSQL policy layer yet. | M2 |
 | B14 | `int2` overflow gives `P0001` (PG: `22003`); `int4` overflow is not detected (`2147483647::int4 + 1` = `2147483648`). | Engine type checks. | upstream / M2 error remap |
 | DEALLOCATE | `DEALLOCATE <name>` and `DEALLOCATE ALL` are answered with their command tags but do not remove protocol-level prepared statements; an unknown name is not reported (`26000` in PostgreSQL). Enough for psycopg, which sends `DEALLOCATE ALL` after DDL. | The simple-query handler cannot reach pgwire's statement store; the engine has no SQL `PREPARE`. | M2 |

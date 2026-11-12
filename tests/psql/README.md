@@ -20,7 +20,7 @@ missing or the target is unreachable. Probe mismatches never change the exit sta
 
 | Path | What |
 |---|---|
-| `NN_name.sql`, `NN_name.sh` | Layer-1 scenarios (PLAN.md T1). `.sql` runs as `psql -X -q -f`; `.sh` prints its own deterministic output. |
+| `NN_name.sql`, `NN_name.sh` | Layer-1 scenarios (docs/plan.md T1). `.sql` runs as `psql -X -q -f`; `.sh` prints its own deterministic output. |
 | `expected/NN_name.out` | Expected scenario output. |
 | `probes/NN_name.sql` | DSQL-rule probes; one rule family per file. |
 | `probes/expected/NN_name.out` | Reference behaviour (captured from MiniStack with `DSQL_STRICT=1`). |

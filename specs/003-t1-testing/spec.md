@@ -6,7 +6,7 @@
 
 **Status**: Harness implemented; Reconcile (after M1) pending
 
-**Input**: User description: "T1 testing phase of PLAN.md: target-agnostic psql scenario harness (layer 1: 00_connect, 10_crud, 20_txn, 30_errors, 40_conflict, run.sh with known-gaps skip list), DSQL-rule probes (report-only) incl. cases mined from MiniStack tests/test_dsql.py, MiniStack reference bring-up scripts (ministack-up/down), differential compare.sh writing reports/diff-<date>.md, optional CI differential workflow; exit criteria from PLAN.md T1 (layer 1 green vs micro-dsql locally & CI, green vs MiniStack, first diff report with probe mismatches as M2/M3 backlog, README 3-line quick start). Parts needing the micro-dsql binary are deferred to a post-M1 reconcile phase."
+**Input**: User description: "T1 testing phase of docs/plan.md: target-agnostic psql scenario harness (layer 1: 00_connect, 10_crud, 20_txn, 30_errors, 40_conflict, run.sh with known-gaps skip list), DSQL-rule probes (report-only) incl. cases mined from MiniStack tests/test_dsql.py, MiniStack reference bring-up scripts (ministack-up/down), differential compare.sh writing reports/diff-<date>.md, optional CI differential workflow; exit criteria from docs/plan.md T1 (layer 1 green vs micro-dsql locally & CI, green vs MiniStack, first diff report with probe mismatches as M2/M3 backlog, README 3-line quick start). Parts needing the micro-dsql binary are deferred to a post-M1 reconcile phase."
 
 > **Delivery note.** This spec covers all of T1. The harness (scenarios, expected outputs, probes,
 > runner, reference bring-up, comparison report, CI draft) is delivered in this wave. Everything
@@ -107,7 +107,7 @@ is green (or every failure is recorded under the known-gap rule).
 **Acceptance Scenarios**:
 
 1. **Given** a running micro-dsql, **When** the runner is started, **Then** layer 1 is green, or
-   each failing scenario is in the skip list and in `KNOWN_GAPS.md` (constitution Principle V).
+   each failing scenario is in the skip list and in `docs/known-gaps.md` (constitution Principle V).
 2. **Given** the CI workflow, **When** a commit is pushed, **Then** layer 1 runs against micro-dsql.
 
 ---
@@ -134,7 +134,7 @@ is green (or every failure is recorded under the known-gap rule).
 - **FR-001**: The harness MUST select its target only through the standard libpq variables
   `PGHOST`, `PGPORT`, `PGUSER` (`admin`), `PGDATABASE` (`postgres`), `PGPASSWORD` (any) and
   `PGSSLMODE=disable`.
-- **FR-002**: The harness MUST provide the layer-1 scenarios exactly as PLAN.md T1 lists them:
+- **FR-002**: The harness MUST provide the layer-1 scenarios exactly as docs/plan.md T1 lists them:
   `00_connect` (`SELECT 1`, `current_user`, `current_database()`, `SHOW server_version`,
   `SHOW timezone`), `10_crud` (CREATE TABLE with PK, `INSERT … RETURNING`, `SELECT` with
   `WHERE`/`ORDER BY`, `UPDATE`, `DELETE`, `DROP TABLE`), `20_txn` (`BEGIN`/`COMMIT`, `ROLLBACK`
@@ -201,23 +201,23 @@ is green (or every failure is recorded under the known-gap rule).
 Decisions taken without a human in the loop (decision; alternatives; reason):
 
 - **Reference = MiniStack, run with `DSQL_STRICT=1`**; alternatives: plain `postgres:16`,
-  Dreamescaper emulator; MiniStack is the PLAN.md T1 reference and came up successfully.
+  Dreamescaper emulator; MiniStack is the docs/plan.md T1 reference and came up successfully.
 - **MiniStack's default isolation is READ COMMITTED and it accepts other isolation levels**
   (measured: `SHOW transaction_isolation` = `read committed`, `BEGIN ISOLATION LEVEL READ
   COMMITTED` succeeds). The "other isolation levels are refused" check therefore lives in a probe,
   not in layer 1; alternatives: keep it in layer 1 (could never be green on the reference); reason:
-  PLAN.md says to fix the scenario when it can't be green on MiniStack.
+  docs/plan.md says to fix the scenario when it can't be green on MiniStack.
 - **`40_conflict` uses an explicit `BEGIN ISOLATION LEVEL REPEATABLE READ`** and a lock-free
   ordering (session B takes its snapshot, session A updates and commits, session B updates and
   commits); alternatives: overlapping writers (would block on Postgres-backed engines), default
   isolation (no conflict under READ COMMITTED); reason: deterministic on every engine model, and
   DSQL accepts the explicit RR form.
 - **`20_txn` and `40_conflict` use `\set VERBOSITY sqlstate`** so that only SQLSTATEs (not engine
-  message wording) are compared; `30_errors` uses `verbose` exactly as PLAN.md says; alternatives:
+  message wording) are compared; `30_errors` uses `verbose` exactly as docs/plan.md says; alternatives:
   default verbosity (compares message text, which differs between engines); reason: the T1 bar is
   "SQLSTATEs like DSQL", not identical messages.
 - **The runner deletes `LOCATION:` lines and "does not exist, skipping" notices** before diffing;
-  alternatives: avoid verbose mode entirely (contradicts PLAN.md); reason: those lines name server
+  alternatives: avoid verbose mode entirely (contradicts docs/plan.md); reason: those lines name server
   source files or depend on leftover state.
 - **Expected outputs are recorded with a psql 16 client**, the version shipped by CI Linux runners;
   alternatives: newer clients; reason: psql's own formatting can change between major versions.
@@ -227,11 +227,11 @@ Decisions taken without a human in the loop (decision; alternatives; reason):
 - **Probes are separate files under `tests/psql/probes/`, one rule family per file**, with their
   own expected outputs and objects named with a probe-specific prefix; reason: a mismatch maps to one
   backlog item.
-- **MiniStack's own test suite is mined, not run** (PLAN.md).
+- **MiniStack's own test suite is mined, not run** (docs/plan.md).
 - **`00_connect` checks that `current_user` is present, not that it equals `admin`**: MiniStack maps
   every login to its backend superuser `postgres`; the exact role (and `is_superuser`) is compared
   in probe `12_session_identity` instead; alternatives: assert `admin` (never green on the
-  reference); reason: PLAN.md "fix the scenario if it can't be green on MiniStack". Logging in as
+  reference); reason: docs/plan.md "fix the scenario if it can't be green on MiniStack". Logging in as
   `admin` with any password is still proven by every scenario's connection.
 - **`server_version` is checked as `16.%`** in `00_connect` (exact value in probe
   `12_session_identity`); reason: DSQL, MiniStack (16.15) and micro-dsql report different minors.
@@ -258,12 +258,12 @@ Reconcile (after M1) decisions:
 - **`DEALLOCATE` is answered with its command tag without touching the statement store**;
   alternatives: remove the named statement and report `26000` for unknown names (needs the
   statement store in the simple-query path, which pgwire's handler bounds do not expose);
-  reason: psycopg only needs `DEALLOCATE ALL` to succeed; the difference is in `KNOWN_GAPS.md`.
+  reason: psycopg only needs `DEALLOCATE ALL` to succeed; the difference is in `docs/known-gaps.md`.
 - **CI layer-1 and differential wiring is kept as M1 delivered it** (it already runs layer 1
   against micro-dsql on macOS and Linux as a blocking step, and uses micro-dsql as target A in the
   allowed-to-fail differential job); alternatives: a separate layer-1 job; reason: no gap found.
 - **README quick start kept as M1 wrote it** (three lines: start, connect with psql, done).
-- **Probe mismatches are recorded, not fixed** (PLAN.md T1: "fidelity gaps found here are
+- **Probe mismatches are recorded, not fixed** (docs/plan.md T1: "fidelity gaps found here are
   recorded, not fixed"); the `DEALLOCATE` fix is the exception because it broke a mainstream
   driver outright.
 
@@ -282,7 +282,7 @@ Run on 2026-11-12 against micro-dsql built from this branch (debug build, `--mem
 | 40_conflict | PASS | PASS | PASS | identical |
 
 No layer-1 diff between micro-dsql and MiniStack; `tests/psql/known-gaps.txt` stays empty. The same
-five scenarios also pass through the tokio-postgres harness (`tests/smoke/t1_layer1.rs`) over both
+five scenarios also pass through the tokio-postgres harness (`crates/server/tests/smoke/t1_layer1.rs`) over both
 the simple and the extended protocol, with the same values asserted for both. Start-up to first
 accepted TCP connection: about 20 ms (the first launch of a freshly linked binary on macOS took
 about 2 s, an OS first-run check, not micro-dsql).
@@ -324,7 +324,7 @@ MiniStack itself differs from real DSQL (tests/psql/README.md) the target is rea
 
 ### Driver re-test (M0 spike scripts against micro-dsql)
 
-The M0 smoke scripts (`spike/`) were run unchanged against fresh micro-dsql instances (one per
+The M0 smoke scripts (`research/spike/`) were run unchanged against fresh micro-dsql instances (one per
 group). Every step that is not an intentional error passes; the only `ERR` lines are the
 deliberate duplicate-key steps (`23505`).
 
@@ -337,11 +337,11 @@ deliberate duplicate-key steps (`23505`).
 | pgx (extended + simple) | 13 | 2 (dup-key steps) | |
 | wire probe | 1 error | 0 | Terminate closes the connection |
 | OCC scripts | — | all errors are the expected `40001`/`25P02`/refused isolation levels | `SET SESSION CHARACTERISTICS … REPEATABLE READ` refused (backlog #11) |
-| app schema/queries/probes | 39 errors | 40 errors | engine gaps already in `KNOWN_GAPS.md` (B6–B8, B12, B14) |
+| app schema/queries/probes | 39 errors | 40 errors | engine gaps already in `docs/known-gaps.md` (B6–B8, B12, B14) |
 
-JDBC was not re-tested (no smoke script in `spike/`).
+JDBC was not re-tested (no smoke script in `research/spike/`).
 
-## T1 exit checklist (PLAN.md §4 T1)
+## T1 exit checklist (docs/plan.md §4 T1)
 
 - [x] Layer 1 is green against micro-dsql locally (5/5, psql 16 and 18 clients, two consecutive
   runs). **In CI: not verified** — `.github/workflows/ci.yml` runs it as a blocking step on

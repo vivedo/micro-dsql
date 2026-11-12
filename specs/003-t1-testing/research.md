@@ -4,12 +4,12 @@ Each entry: decision, rationale, alternatives considered.
 
 ## R1. Reference target
 - **Decision**: MiniStack (`ministackorg/ministack`, `DSQL_STRICT=1`, Docker socket mounted).
-- **Rationale**: PLAN.md T1 names it; it fronts a real `postgres:16-alpine` with a DSQL rule proxy
+- **Rationale**: docs/plan.md T1 names it; it fronts a real `postgres:16-alpine` with a DSQL rule proxy
   whose messages were measured against live DSQL. The proxy runs inside the MiniStack container and
   listens on `25432+n`, so publishing `25432-25440` on the MiniStack container is sufficient (the
   backend Postgres containers are not published).
 - **Alternatives**: plain `postgres:16` (no DSQL rules; kept as the documented fallback),
-  Dreamescaper emulator (not the PLAN.md reference).
+  Dreamescaper emulator (not the docs/plan.md reference).
 
 ## R2. Measured reference facts (MiniStack, 2026-11-12)
 - `server_version` = `16.15`, `TimeZone` = `UTC`, `is_superuser` = `on`.
@@ -34,7 +34,7 @@ Each entry: decision, rationale, alternatives considered.
 ## R4. Output determinism
 - `psql -X -q -f <relative file>` run from `tests/psql`, so error prefixes read
   `psql:30_errors.sql:<line>:`.
-- `\set VERBOSITY verbose` only in `30_errors.sql` (PLAN.md); `20_txn` and `40_conflict` use
+- `\set VERBOSITY verbose` only in `30_errors.sql` (docs/plan.md); `20_txn` and `40_conflict` use
   `\set VERBOSITY sqlstate` so only codes are compared.
 - Runner normalisation (documented in `run.sh` and contracts/run-sh.md): delete lines starting with
   `LOCATION:` and NOTICE lines ending in `does not exist, skipping`.

@@ -1,17 +1,17 @@
 #!/bin/sh
-# Run every M0 spike experiment and write the output to spike/results/.
+# Run every M0 spike experiment and write the output to research/spike/results/.
 #
 # If TURSOPG points at a tursopg binary, a fresh in-memory server is started on
 # $PGHOST:$PGPORT for each experiment group (clean slate) and stopped afterwards.
 # Otherwise the scripts run against whatever server is already listening.
 #
-#   TURSOPG=<turso-clone>/target/release/tursopg PSQL=<path-to-psql> spike/run-all.sh
+#   TURSOPG=<turso-clone>/target/release/tursopg PSQL=<path-to-psql> research/spike/run-all.sh
 set -u
 here="$(cd "$(dirname "$0")" && pwd)"
 . "$here/env.sh"
 out="$here/results"
 mkdir -p "$out"
-PY="${PYTHON:-$here/../.venv/bin/python}"
+PY="${PYTHON:-$here/../../.venv/bin/python}"
 server_pid=""
 export PYTHONUNBUFFERED=1
 

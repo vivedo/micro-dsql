@@ -20,7 +20,3 @@ micro-dsql-server.workspace = true
 
 [dev-dependencies]
 tokio-postgres.workspace = true
-
-[[test]]
-name = "cli"
-path = "../../tests/smoke/cli.rs"

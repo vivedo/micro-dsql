@@ -1,6 +1,6 @@
 # M0 spike scripts
 
-Evidence for `research/06-spike-findings.md` (PLAN.md milestone M0). They target the upstream `tursopg`
+Evidence for `research/06-spike-findings.md` (docs/plan.md milestone M0). They target the upstream `tursopg`
 binary, not micro-dsql. Every script reads the standard libpq variables (`PGHOST`, `PGPORT`, `PGUSER`,
 `PGDATABASE`, `PGPASSWORD`, `PGSSLMODE`); `env.sh` fills in defaults (`127.0.0.1:5432`, `admin`,
 `postgres`, an arbitrary password, `sslmode=disable`).
@@ -16,20 +16,20 @@ binary, not micro-dsql. Every script reads the standard libpq variables (`PGHOST
 Install the drivers from the repository root:
 
 ```sh
-python3 -m venv .venv && .venv/bin/pip install -r spike/drivers/requirements.txt
-(cd spike/drivers/node && npm ci)
-(cd spike/drivers/go && go mod download)
+python3 -m venv .venv && .venv/bin/pip install -r research/spike/drivers/requirements.txt
+(cd research/spike/drivers/node && npm ci)
+(cd research/spike/drivers/go && go mod download)
 ```
 
 ## Run
 
 ```sh
-TURSOPG=<turso-clone>/target/release/tursopg spike/run-all.sh
+TURSOPG=<turso-clone>/target/release/tursopg research/spike/run-all.sh
 ```
 
 With `TURSOPG` set, a fresh `:memory:` server is started for each group and stopped afterwards.
 Without it, the scripts run against whatever already listens on `$PGHOST:$PGPORT`.
-Output lands in `spike/results/<group>.txt`.
+Output lands in `research/spike/results/<group>.txt`.
 
 | Group | Script | What it does |
 |---|---|---|

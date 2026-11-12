@@ -1,8 +1,8 @@
 # 06 — M0 spike findings: running Turso's Postgres frontend
 
 Run on 2026-11-12. This is the first time the research in 01–05 was checked by **running** the code
-rather than reading it (PLAN.md §4 M0). Everything below is reproducible with the scripts in
-[`spike/`](../spike/README.md); the raw output of the recorded run is in `spike/results/`.
+rather than reading it (docs/plan.md §4 M0). Everything below is reproducible with the scripts in
+[`research/spike/`](spike/README.md); the raw output of the recorded run is in `research/spike/results/`.
 
 ## Summary
 
@@ -23,7 +23,7 @@ weak part is the **wire layer and type fidelity**, not the concurrency model:
    same-PK inserts fail at COMMIT with 40001, write skew is allowed, snapshot is taken at the first
    statement, autocommit writes collide with `55P03 Database is busy` (~4% of writes at 8 workers).
 
-Most driver blockers (1, 2, and the Terminate bug) sit in `postgres/server/lib.rs`, the file PLAN.md
+Most driver blockers (1, 2, and the Terminate bug) sit in `postgres/server/lib.rs`, the file docs/plan.md
 already says we vendor in M1, so they are fixable in our own crate. FK enforcement is likely a
 one-line connection setting. Numeric arithmetic, jsonb and timestamptz gaps are upstream/core work and
 become M1 known gaps.
@@ -50,7 +50,7 @@ CLI as built: `tursopg [OPTIONS] [DATABASE] [SQL]` with `--server <ADDR>`, `-q`,
   (575 s CPU, 409 crates). Binary: **31.5 MB** (release profile keeps debuginfo; macOS, dynamically
   linked to system libs).
 - **Toolchain:** rustup could not download the pinned 1.88 here (TLS trust-store failure in this
-  environment, not a Turso problem). Stable 1.99.1 built the tree with no errors, so PLAN.md §2's
+  environment, not a Turso problem). Stable 1.99.1 built the tree with no errors, so docs/plan.md §2's
   "build with stable first" holds; no `rust-toolchain.toml` pin is needed for M1 yet.
 - **Native deps:** nothing had to be installed. In the `tursopg` dependency tree: `pg_query` 6.1.1
   (bindgen → libclang, from Xcode CLT), `aws-lc-sys` 0.46 (cc/cmake), `mimalloc`, plus `tantivy` and
@@ -64,9 +64,9 @@ CLI as built: `tursopg [OPTIONS] [DATABASE] [SQL]` with `--server <ADDR>`, `-q`,
   Homebrew error in its temp-dir handling, unrelated to the project); the same bottles were unpacked
   by hand and used. Go module downloads needed `SSL_CERT_FILE` pointing at the system CA bundle.
   None of this affects the scripts, which only rely on `psql`/`python`/`node`/`go` and `PG*` vars.
-- **Start-up:** launch to first accepted TCP connection **8–9 ms** (`spike/startup_time.py`).
+- **Start-up:** launch to first accepted TCP connection **8–9 ms** (`research/spike/startup_time.py`).
 
-## 3. Connect (`spike/results/connect.txt`)
+## 3. Connect (`research/spike/results/connect.txt`)
 
 | Check | Result |
 |---|---|
@@ -82,7 +82,7 @@ CLI as built: `tursopg [OPTIONS] [DATABASE] [SQL]` with `--server <ADDR>`, `-q`,
 | `SET enable_seqscan`, `SET statement_timeout = 1000` | rejected (`42601`, `22023` "supported value is 0") |
 | `SHOW search_path`, `SHOW standard_conforming_strings`, `SHOW datestyle` | OK |
 
-## 4. App-style SQL (`spike/app/`, `spike/results/app.txt`)
+## 4. App-style SQL (`research/spike/app/`, `research/spike/results/app.txt`)
 
 No target app exists, so a small shop schema stands in for "your app's SQL": 5 tables (uuid, bigint,
 int, numeric(12,2), bool, timestamptz, jsonb, text), PK/FK/UNIQUE/CHECK/DEFAULT, a composite PK, FKs
@@ -124,7 +124,7 @@ FK enforcement: Turso core has a `foreign_keys` connection flag (SQLite semantic
 and nothing in `postgres/frontend` turns it on, which matches the observed behaviour. Enabling it per
 connection in our server is the likely fix (unverified).
 
-### Research probes (`spike/app/probes.sql`)
+### Research probes (`research/spike/app/probes.sql`)
 
 | Probe | Result |
 |---|---|
@@ -153,7 +153,7 @@ connection in our server is the likely fix (unverified).
 | P24 `EXPLAIN` | SQLite-style plan rows |
 | P25 `'…+00'`, `'…+01'` literals | **`22007 invalid timestamp value`**; `'…+00:00'` OK |
 
-## 5. Driver matrix (`spike/drivers/`, `spike/results/drv-*.txt`, `wire.txt`)
+## 5. Driver matrix (`research/spike/drivers/`, `research/spike/results/drv-*.txt`, `wire.txt`)
 
 Every driver connected with `sslmode=disable` and an arbitrary password.
 
@@ -167,7 +167,7 @@ Every driver connected with `sslmode=disable` and an arbitrary password.
 | pgx v5.13, default (cached statements) | OK | literals only | FAIL (params) | **FAIL**: `mismatched param and argument count` | **FAIL** |
 | pgx v5.13, `QueryExecModeSimpleProtocol` | OK | OK | OK | OK (client-side interpolation) | **PARTIAL**: `count(*)` can't scan (`text (OID 25)` into int64), `numeric` can't scan (`ParseInt "2.50"`) |
 
-Root causes, from `spike/drivers/wire_probe.py`:
+Root causes, from `research/spike/drivers/wire_probe.py`:
 
 | Wire behaviour | Observed |
 |---|---|
@@ -180,7 +180,7 @@ Root causes, from `spike/drivers/wire_probe.py`:
 | Terminate (`X`) | **server does not close the socket** (waits for the client) |
 | Errors | proper ErrorResponse with C/M/D/t/c fields; no connection drops seen |
 
-## 6. OCC experiments (`spike/occ/occ.py`, `spike/results/occ.txt`)
+## 6. OCC experiments (`research/spike/occ/occ.py`, `research/spike/results/occ.txt`)
 
 Two psycopg sessions with explicit `BEGIN`/`COMMIT`, interleaved deterministically, each statement
 guarded by a 10 s client-side timeout.
@@ -247,7 +247,7 @@ Other research statements that the run contradicts or sharpens (they were labell
 | 02 §2 | CancelRequest unsupported | **NOT TESTED** |
 | 02 §2 | engine calls block tokio workers | **NOT TESTED** directly; no stalls seen with 8 concurrent connections |
 
-## 8. Go / no-go against PLAN.md M0
+## 8. Go / no-go against docs/plan.md M0
 
 | M0 criterion | Assessment |
 |---|---|
@@ -285,8 +285,8 @@ would argue for it are listed as known gaps.
 ```sh
 # in a local Turso clone, at the commit above
 cargo build -p tursopg --release          # RUSTUP_TOOLCHAIN=stable if 1.88 is unavailable
-# in this repository (driver installation: spike/README.md)
-TURSOPG=<turso-clone>/target/release/tursopg PSQL=<psql> spike/run-all.sh
+# in this repository (driver installation: research/spike/README.md)
+TURSOPG=<turso-clone>/target/release/tursopg PSQL=<psql> research/spike/run-all.sh
 ```
 
 The whole suite takes about 20 s. The OCC storm counts vary between runs (55P03: 83–95 of 2,400;

@@ -1,6 +1,6 @@
 # micro-dsql — PoC implementation plan
 
-Written 2026-11-12. Builds on [`research/`](research/README.md); read its executive summary first. This file turns the research into an ordered list of things to build. Where they disagree, **this file wins on scope**, and the research wins on facts.
+Written 2026-11-12. Builds on [`research/`](../research/README.md); read its executive summary first. This file turns the research into an ordered list of things to build. Where they disagree, **this file wins on scope**, and the research wins on facts.
 
 ## 1. Goal and scope
 
@@ -51,7 +51,7 @@ For reading and spiking:
 
 ```
 micro-dsql/
-├── PLAN.md                    # this file
+├── docs/plan.md                    # this file
 ├── README.md                  # usage, once there is something to run
 ├── research/                  # existing analysis (read-only reference)
 ├── Cargo.toml                 # workspace; turso crates = git dep, pinned rev
@@ -62,7 +62,7 @@ micro-dsql/
 │   ├── policy/                # DSQL rules on the pg_query AST + per-txn state machine
 │   │                          #   + error shaping (OC000/OC001, 54000/54011)
 │   └── sys/                   # sys.jobs / sys.wait_for_job / sys.dsql_major_version (M3)
-├── bin/micro-dsql/            # main.rs: clap flags, tracing, signal handling
+├── crates/micro-dsql/            # main.rs: clap flags, tracing, signal handling
 ├── scripts/
 │   ├── ministack-up.sh        # start MiniStack (DSQL_STRICT=1) + create a reference cluster (T1)
 │   └── compare.sh             # run tests/psql against micro-dsql and MiniStack, write a diff report (T1)
