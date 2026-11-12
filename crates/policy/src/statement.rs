@@ -147,6 +147,13 @@ mod tests {
     }
 
     #[test]
+    fn engine_sql_carries_rewrites_and_original_stays_untouched() {
+        let plan = StatementPlan::new("CREATE TABLE t (n numeric, m int)");
+        assert_eq!(plan.original, "CREATE TABLE t (n numeric, m int)");
+        assert_eq!(plan.engine_sql, "CREATE TABLE t (n numeric(18,6), m int)");
+    }
+
+    #[test]
     fn refusals_are_recorded_in_the_plan() {
         let plan = StatementPlan::new("TRUNCATE t");
         assert_eq!(plan.refusal.as_ref().map(|e| e.rule), Some("truncate"));

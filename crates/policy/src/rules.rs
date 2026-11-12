@@ -32,7 +32,7 @@ fn unsupported(id: &'static str, kind: &str) -> Option<PolicyError> {
 
 /// The column definitions a statement introduces: `CREATE TABLE` columns and
 /// `ALTER TABLE ... ADD COLUMN`.
-fn new_columns(node: &NodeEnum) -> Vec<&pg_query::protobuf::ColumnDef> {
+pub(crate) fn new_columns(node: &NodeEnum) -> Vec<&pg_query::protobuf::ColumnDef> {
     let nodes: Vec<&pg_query::protobuf::Node> = match node {
         NodeEnum::CreateStmt(create) => create.table_elts.iter().collect(),
         NodeEnum::AlterTableStmt(alter) => alter

@@ -9,6 +9,8 @@ use std::borrow::Cow;
 
 use pg_query::NodeEnum;
 
+use crate::rules::new_columns;
+
 /// Inserts `insert` at byte offset `at` of the original text.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TextEdit {
@@ -20,7 +22,44 @@ pub struct TextEdit {
 pub type Rewrite = fn(&NodeEnum, &str) -> Vec<TextEdit>;
 
 /// The registered AST rewrites, by id.
-pub const REWRITES: &[(&str, Rewrite)] = &[];
+pub const REWRITES: &[(&str, Rewrite)] = &[("bare_numeric", bare_numeric)];
+
+/// `numeric` / `decimal` without precision in `CREATE TABLE` and `ALTER TABLE ... ADD COLUMN`
+/// means `numeric(18,6)` on DSQL (FR-040): insert `(18,6)` after the type name token.
+fn bare_numeric(node: &NodeEnum, sql: &str) -> Vec<TextEdit> {
+    let columns = new_columns(node);
+    let bare: Vec<usize> = columns
+        .iter()
+        .filter_map(|col| col.type_name.as_ref())
+        .filter(|ty| {
+            ty.typmods.is_empty()
+                && ty.array_bounds.is_empty()
+                && matches!(
+                    ty.names.last().and_then(|n| n.node.as_ref()),
+                    Some(NodeEnum::String(s)) if s.sval == "numeric"
+                )
+        })
+        .filter_map(|ty| usize::try_from(ty.location).ok())
+        .collect();
+    if bare.is_empty() {
+        return Vec::new();
+    }
+    let Ok(scanned) = pg_query::scan(sql) else {
+        return Vec::new();
+    };
+    bare.into_iter()
+        .filter_map(|start| {
+            let token = scanned
+                .tokens
+                .iter()
+                .find(|t| usize::try_from(t.start).ok() == Some(start))?;
+            Some(TextEdit {
+                at: usize::try_from(token.end).ok()?,
+                insert: "(18,6)".to_owned(),
+            })
+        })
+        .collect()
+}
 
 /// Stage 1: raw text before parsing. Identity today.
 pub fn pre_parse(sql: &str) -> Cow<'_, str> {
@@ -98,9 +137,8 @@ mod tests {
         assert_eq!(apply_edits(sql, &edits), "é-1");
     }
 
-    #[test]
-    fn no_rewrites_registered_yet() {
-        let parsed = pg_query::parse("CREATE TABLE t (n numeric)").unwrap();
+    fn rewritten(sql: &str) -> String {
+        let parsed = pg_query::parse(sql).unwrap();
         let node = parsed.protobuf.stmts[0]
             .stmt
             .as_ref()
@@ -108,6 +146,55 @@ mod tests {
             .node
             .as_ref()
             .unwrap();
-        let _ = ast_rewrites(node, "CREATE TABLE t (n numeric)");
+        apply_edits(sql, &ast_rewrites(node, sql)).into_owned()
+    }
+
+    #[test]
+    fn bare_numeric_in_create_table() {
+        assert_eq!(
+            rewritten("CREATE TABLE t (id int, n numeric, d decimal, e numeric(5), f numeric(10,2), g decimal(4,1))"),
+            "CREATE TABLE t (id int, n numeric(18,6), d decimal(18,6), e numeric(5), f numeric(10,2), g decimal(4,1))"
+        );
+        assert_eq!(
+            rewritten("CREATE TABLE t (n numeric NOT NULL DEFAULT 1, m NUMERIC)"),
+            "CREATE TABLE t (n numeric(18,6) NOT NULL DEFAULT 1, m NUMERIC(18,6))"
+        );
+        assert_eq!(
+            rewritten("CREATE TABLE t (n numeric)"),
+            "CREATE TABLE t (n numeric(18,6))"
+        );
+    }
+
+    #[test]
+    fn bare_numeric_in_add_column() {
+        assert_eq!(
+            rewritten("ALTER TABLE t ADD COLUMN n numeric"),
+            "ALTER TABLE t ADD COLUMN n numeric(18,6)"
+        );
+        assert_eq!(
+            rewritten("ALTER TABLE t ADD COLUMN IF NOT EXISTS n decimal NOT NULL, ADD COLUMN k numeric(3)"),
+            "ALTER TABLE t ADD COLUMN IF NOT EXISTS n decimal(18,6) NOT NULL, ADD COLUMN k numeric(3)"
+        );
+    }
+
+    #[test]
+    fn only_the_type_name_changes() {
+        // Quoted identifiers and comments that say "numeric" are not touched.
+        assert_eq!(
+            rewritten(
+                "CREATE TABLE \"numeric\" (\"numeric\" int, n numeric /* numeric */) -- numeric"
+            ),
+            "CREATE TABLE \"numeric\" (\"numeric\" int, n numeric(18,6) /* numeric */) -- numeric"
+        );
+        for sql in [
+            "SELECT 1.5::numeric",
+            "SELECT CAST(x AS numeric) FROM t",
+            "CREATE TABLE t (id int, n numeric(5,2))",
+            "ALTER TABLE t ALTER COLUMN n TYPE numeric",
+            "INSERT INTO t VALUES (1)",
+            "CREATE TABLE t (n int)",
+        ] {
+            assert_eq!(rewritten(sql), sql);
+        }
     }
 }
