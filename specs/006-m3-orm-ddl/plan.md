@@ -72,14 +72,14 @@ files, 2 scripts, 1 Node project
 | Principle / gate | Status |
 |---|---|
 | I. PoC scope | PASS. DDL fidelity is M3 scope (docs/plan.md §4). No TLS/auth/control plane. `information_schema` and ORM introspection (`drizzle-kit push`) stay non-goals: the Drizzle check uses generated SQL, not introspection. |
-| II. Own repo, pinned upstream; patches last | PASS (planned). `sys.*`: done in our crates (research D2), so the "probably needs the first Turso patch" expectation of docs/plan.md does not materialise. ADD CONSTRAINT: attempted in the server layer through a public core API (D7), gated by spike T030. A patch is used only if the spike fails; then the feature stops for an owner decision (blocking question, below) because the first patch must also solve the `patch-crate` git-workspace constraint. New dependency `turso_parser` uses the same pinned rev (one rev for every Turso crate). |
+| II. Own repo, pinned upstream; patches last | PASS (planned). `sys.*`: done in our crates (research D2), so the "probably needs the first Turso patch" expectation of docs/plan.md does not materialise. ADD CONSTRAINT: attempted in the server layer through a public core API (D7), gated by spike T032. A patch is used only if the spike fails; then the feature stops for an owner decision (blocking question, below) because the first patch must also solve the `patch-crate` git-workspace constraint. New dependency `turso_parser` uses the same pinned rev (one rev for every Turso crate). |
 | III. Backend-agnostic policy | PASS. New policy modules (`identity`, `ddl_rules`, `jobs`) work on the AST and plain values; job ids are encoded from a `u128` the server supplies; the engine-facing work (`sys.rs`, `ddl.rs`, `constraints.rs`) is in the server. All rules and rewrites unit-tested without an engine. |
 | IV. Test-first; gates `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings`, `cargo test --workspace`, `tests/psql/run.sh` vs micro-dsql | PLANNED. Each rule/rewrite gets a failing unit test and integration test first (tasks.md). Layer-1 expected outputs unchanged (they use no index, identity or ALTER). The two exit scripts are additional checks, not gates, and are not run by `cargo test`. |
 | V. Known-gap policy | PLANNED. docs/known-gaps.md: B12 narrowed; new entries (GENERATED ALWAYS, synchronous jobs, no invalid index, `oid` described as `integer`, `sys` visible as a schema/table, CACHE stored as 1, NOT VALID forms refused, `convalidated` if not expressible, `main.` in 42P01 texts, out-of-scope ALTER forms). |
 | Repository constraints | PASS. `research/` untouched; golden probes fetched at a pinned commit recorded in `scripts/conformance/UPSTREAM`, never committed; `reports/`, `target/`, `node_modules/` gitignored; no tool attribution; no absolute paths. |
 | Scope questions | One reinterpretation (not a scope change): "Drizzle's migrations run cleanly" cannot mean the stock migrator, which fails on live DSQL (research §2); spec Clarifications record the reading. |
 
-**Post-design re-check**: PASS, with one conditional item: if spike T030 fails, Principle II's
+**Post-design re-check**: PASS, with one conditional item: if spike T032 fails, Principle II's
 patch path applies and needs the owner (see Blocking questions).
 
 ## Design
@@ -143,11 +143,11 @@ repository has none since `ff325a3`).
   `PostgresDialect` modules. DSQL's real interface does not need engine functions: `sys.jobs` is a
   table the engine can hold (`CREATE SCHEMA sys` works), `wait_for_job` is a procedure called with
   `CALL` (answered by micro-dsql), and `dsql_major_version()` is used in two fixed forms.
-- `ADD CONSTRAINT … NOT VALID`: **no patch if spike T030 succeeds**. The core engine already has the
+- `ADD CONSTRAINT … NOT VALID`: **no patch if spike T032 succeeds**. The core engine already has the
   operation (`AlterTableBody::AlterColumn` with a full column definition, including `REFERENCES`
   and `CHECK`), reachable from our server through the public
   `turso_core::Connection::prepare_translated_stmt`. Only the PG translator lacks the mapping.
-- If T030 fails, the minimal generic patch would be in `turso_pg_parser`'s translator
+- If T032 fails, the minimal generic patch would be in `turso_pg_parser`'s translator
   (`postgres/parser/translator.rs`, `AtAddConstraint` → core `AlterColumn` for single-column FK/CHECK
   with `NOT VALID` accepted). Wiring it requires the first `patch-crate` setup: list the crate in
   `[workspace.metadata.patch]`, `cargo patch-crate` copies it to `target/patch/`, and a
@@ -185,7 +185,7 @@ reuses it. Only one feature wires it.
 
 ### Blocking questions
 
-None at plan time. Conditional: if spike T030 shows the core `ALTER COLUMN` path cannot add an
+None at plan time. Conditional: if spike T032 shows the core `ALTER COLUMN` path cannot add an
 enforced single-column FK/CHECK on a PG-dialect connection, the owner must decide between (a) the
 first Turso patch (with the patch-crate constraint resolved or the constitution amended), or (b)
 refusing `ADD CONSTRAINT … NOT VALID` (Drizzle FKs then fail; exit criterion not met).

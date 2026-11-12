@@ -296,7 +296,7 @@ and run in the session's transaction. The column's current definition comes from
 schema. Single-column FKs (with ON DELETE/ON UPDATE actions) and CHECKs naming one column map to a
 column constraint; multi-column FKs, table-level CHECKs over several columns and `DEFERRABLE` are
 refused with `0A000` (µ text, FR-021a). The constraint name is kept. **This path is unproven**:
-task T030 is a spike that must show, at the pinned rev, that (a) the statement prepares on a
+task T032 is a spike that must show, at the pinned rev, that (a) the statement prepares on a
 PG-dialect connection, (b) new rows are checked (`23503`/`23514` with the constraint name), (c)
 existing violating rows are not checked, (d) the table's data, indexes and other constraints
 survive, (e) `pg_constraint` shows the constraint. If the spike fails, the fallback is a
@@ -313,7 +313,7 @@ transaction (FK: child rows with non-null keys and no parent; CHECK: rows where 
 false) and records the job `completed` or `failed` (details: PostgreSQL's violation text). The
 statement itself succeeds either way, as on DSQL. `convalidated` stays as the engine reports it
 (known gap if it cannot express NOT VALID, FR-022). If the catalog lacks what is needed (spike
-T030 checks `pg_constraint` columns and `pg_get_constraintdef`), the definition recorded at ADD
+T032 checks `pg_constraint` columns and `pg_get_constraintdef`), the definition recorded at ADD
 time is kept in the job-adjacent server state instead — decided in the spike.
 
 **D9 — Tooling outside the Rust gate.**
