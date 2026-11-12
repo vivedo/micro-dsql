@@ -11,6 +11,7 @@ use crate::classify::{StatementClass, TxnControl};
 use crate::errors::{self, PolicyError};
 use crate::intercept::Intercept;
 use crate::jobs::JobAction;
+use crate::occ::OccTxn;
 use crate::settings::{default_value, show_column, SessionSettings, SettingCommand};
 use crate::statement::StatementPlan;
 
@@ -82,7 +83,7 @@ pub enum Admission<'a> {
     RollbackThenRefuse(PolicyError),
 }
 
-/// State of one explicit transaction (M4 adds the doomed-transaction flag here).
+/// State of one transaction the policy tracks.
 #[derive(Debug, Clone)]
 pub struct TxnState {
     /// When the engine status went from idle to active.
@@ -95,6 +96,8 @@ pub struct TxnState {
     rows_changed: u64,
     /// `SET LOCAL` values; dropped with the transaction.
     local: HashMap<&'static str, String>,
+    /// Optimistic-concurrency state (M4): doomed, implicit, pinned, `BEGIN` text.
+    pub occ: OccTxn,
 }
 
 impl TxnState {
@@ -105,6 +108,7 @@ impl TxnState {
             saw_dml: false,
             rows_changed: 0,
             local: HashMap::new(),
+            occ: OccTxn::default(),
         }
     }
 }
@@ -154,6 +158,13 @@ impl SessionPolicy {
                     };
                 }
             }
+        }
+        // A deferred write conflict surfaces at COMMIT (DSQL reports conflicts there).
+        if status == TxnStatus::Active
+            && plan.class == StatementClass::Txn(TxnControl::Commit)
+            && self.is_doomed()
+        {
+            return Admission::RollbackThenRefuse(errors::oc000());
         }
         if let Some(error) = &plan.refusal {
             return Admission::Refuse(error.clone());
@@ -297,9 +308,14 @@ impl SessionPolicy {
             TxnStatus::Active | TxnStatus::Aborted => {
                 // The statement that opened the transaction (BEGIN) starts the counters.
                 let Some(txn) = self.txn.as_mut() else {
-                    self.txn = Some(TxnState::new(now));
+                    let mut txn = TxnState::new(now);
+                    if plan.class == StatementClass::Txn(TxnControl::Begin) {
+                        txn.occ.begin_sql = Some(plan.original.clone());
+                    }
+                    self.txn = Some(txn);
                     return Ok(());
                 };
+                txn.occ.touched = true;
                 if plan.setting == Some(SettingCommand::ResetAll) {
                     txn.local.clear();
                 }
@@ -324,6 +340,8 @@ impl SessionPolicy {
     pub fn failed(&mut self, status_after: TxnStatus) {
         if status_after == TxnStatus::Idle {
             self.txn = None;
+        } else if let Some(txn) = self.txn.as_mut() {
+            txn.occ.touched = true;
         }
     }
 
@@ -348,6 +366,58 @@ impl SessionPolicy {
             }
         }
         Ok(())
+    }
+
+    /// Starts tracking a transaction the server opened itself (a multi-statement string):
+    /// the discipline rules and row counting apply to its statements as to a client's.
+    pub fn begin_implicit(&mut self, now: Instant) {
+        let mut txn = TxnState::new(now);
+        txn.occ.implicit = true;
+        self.txn = Some(txn);
+    }
+
+    /// Records that a write conflict was deferred: the engine transaction was re-opened and
+    /// `COMMIT` must fail with OC000. No-op without an open, client-owned transaction.
+    pub fn mark_doomed(&mut self) {
+        if let Some(txn) = self.txn.as_mut() {
+            txn.occ.mark_doomed();
+        }
+    }
+
+    pub fn is_doomed(&self) -> bool {
+        self.txn.as_ref().is_some_and(|txn| txn.occ.doomed)
+    }
+
+    pub fn is_implicit(&self) -> bool {
+        self.txn.as_ref().is_some_and(|txn| txn.occ.implicit)
+    }
+
+    /// Records that the snapshot of the open transaction was pinned.
+    pub fn mark_pinned(&mut self) {
+        if let Some(txn) = self.txn.as_mut() {
+            txn.occ.pinned = true;
+        }
+    }
+
+    /// The client's `BEGIN` text of the open transaction, to re-open it.
+    pub fn begin_sql(&self) -> Option<&str> {
+        self.txn.as_ref()?.occ.begin_sql.as_deref()
+    }
+
+    /// True when the open transaction must be re-opened unpinned before `plan` runs.
+    pub fn needs_fresh_snapshot(&self, plan: &StatementPlan) -> bool {
+        self.txn
+            .as_ref()
+            .is_some_and(|txn| txn.occ.needs_fresh_snapshot(plan))
+    }
+
+    /// The row limit for one autocommit statement, which is its own transaction.
+    pub fn check_implicit_rows(&self, rows_changed: u64) -> Result<(), PolicyError> {
+        if rows_changed > self.limits.max_rows_per_txn {
+            Err(errors::row_limit())
+        } else {
+            Ok(())
+        }
     }
 
     /// Whether an explicit transaction is being tracked (test and diagnostics aid).
@@ -967,5 +1037,127 @@ mod tests {
             respond(&mut s, "SHOW enable_seqscan", TxnStatus::Aborted),
             Admission::Run { .. }
         ));
+    }
+
+    // --- M4: OCC bookkeeping (US1, US2, US3) ---
+
+    #[test]
+    fn begin_records_its_text_and_later_statements_touch_the_transaction() {
+        let now = Instant::now();
+        let mut s = SessionPolicy::new(PolicyLimits::default());
+        assert_eq!(s.begin_sql(), None);
+        s.complete(
+            &plan("BEGIN ISOLATION LEVEL REPEATABLE READ"),
+            0,
+            TxnStatus::Active,
+            now,
+        )
+        .unwrap();
+        assert_eq!(s.begin_sql(), Some("BEGIN ISOLATION LEVEL REPEATABLE READ"));
+        assert!(!s.is_implicit() && !s.is_doomed());
+        s.mark_pinned();
+        let ddl = plan("CREATE TABLE a (id int)");
+        assert!(s.needs_fresh_snapshot(&ddl));
+        s.complete(&plan("SELECT 1"), 0, TxnStatus::Active, now)
+            .unwrap();
+        assert!(!s.needs_fresh_snapshot(&ddl));
+    }
+
+    #[test]
+    fn a_failed_statement_touches_the_transaction_too() {
+        let now = Instant::now();
+        let mut s = begun(PolicyLimits::default(), now);
+        s.mark_pinned();
+        s.failed(TxnStatus::Aborted);
+        assert!(!s.needs_fresh_snapshot(&plan("CREATE TABLE a (id int)")));
+    }
+
+    #[test]
+    fn dml_first_in_a_pinned_transaction_needs_no_fresh_snapshot() {
+        let now = Instant::now();
+        let mut s = begun(PolicyLimits::default(), now);
+        s.mark_pinned();
+        assert!(!s.needs_fresh_snapshot(&plan("INSERT INTO a VALUES (1)")));
+    }
+
+    #[test]
+    fn implicit_rows_are_checked_against_the_limit() {
+        let s = SessionPolicy::new(PolicyLimits::default());
+        assert!(s.check_implicit_rows(3000).is_ok());
+        let e = s.check_implicit_rows(3001).unwrap_err();
+        assert_eq!(
+            (e.sqlstate, e.message.as_str()),
+            ("54000", "transaction row limit exceeded")
+        );
+    }
+
+    #[test]
+    fn begin_implicit_tracks_until_the_status_goes_idle() {
+        let now = Instant::now();
+        let mut s = SessionPolicy::new(PolicyLimits::default());
+        s.begin_implicit(now);
+        assert!(s.in_transaction() && s.is_implicit());
+        s.complete(&plan("INSERT INTO a VALUES (1)"), 1, TxnStatus::Active, now)
+            .unwrap();
+        assert!(s.is_implicit());
+        s.complete(&plan("COMMIT"), 0, TxnStatus::Idle, now)
+            .unwrap();
+        assert!(!s.in_transaction() && !s.is_implicit());
+    }
+
+    #[test]
+    fn a_doomed_commit_is_rolled_back_with_oc000() {
+        let now = Instant::now();
+        let mut s = begun(PolicyLimits::default(), now);
+        s.mark_doomed();
+        assert!(s.is_doomed());
+        match s.admit(&plan("COMMIT"), TxnStatus::Active, now) {
+            Admission::RollbackThenRefuse(e) => assert_eq!(e, errors::oc000()),
+            other => panic!("{other:?}"),
+        }
+        // The server rolls back; the transaction is gone.
+        s.failed(TxnStatus::Idle);
+        assert!(!s.is_doomed());
+    }
+
+    #[test]
+    fn a_doomed_transaction_still_runs_statements_and_rolls_back() {
+        let now = Instant::now();
+        let mut s = begun(PolicyLimits::default(), now);
+        s.mark_doomed();
+        assert!(matches!(
+            s.admit(&plan("UPDATE a SET v = 1"), TxnStatus::Active, now),
+            Admission::Run { .. }
+        ));
+        assert!(matches!(
+            s.admit(&plan("ROLLBACK"), TxnStatus::Active, now),
+            Admission::Run { .. }
+        ));
+        // An aborted block answers COMMIT through the engine (it rolls back).
+        assert!(matches!(
+            s.admit(&plan("COMMIT"), TxnStatus::Aborted, now),
+            Admission::Run { .. }
+        ));
+    }
+
+    #[test]
+    fn the_age_limit_wins_over_doomed() {
+        let t0 = Instant::now();
+        let mut s = begun(PolicyLimits::default(), t0);
+        s.mark_doomed();
+        let late = t0 + Duration::from_secs(301);
+        match s.admit(&plan("COMMIT"), TxnStatus::Active, late) {
+            Admission::RollbackThenRefuse(e) => assert_eq!(e.rule, "txn_age_limit"),
+            other => panic!("{other:?}"),
+        }
+    }
+
+    #[test]
+    #[cfg(not(debug_assertions))]
+    fn mark_doomed_on_an_implicit_transaction_is_a_no_op() {
+        let mut s = SessionPolicy::new(PolicyLimits::default());
+        s.begin_implicit(Instant::now());
+        s.mark_doomed();
+        assert!(!s.is_doomed());
     }
 }

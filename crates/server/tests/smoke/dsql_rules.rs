@@ -294,6 +294,7 @@ fn short_age_server() -> TestServer {
             max_txn_age: Duration::from_secs(1),
             ..PolicyLimits::default()
         },
+        ..ServerOptions::default()
     })
 }
 
