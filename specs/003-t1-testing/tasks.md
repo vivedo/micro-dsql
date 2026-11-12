@@ -64,8 +64,8 @@ from micro-dsql.
 ## Phase 6: Polish
 
 - [x] T021 [P] Document the harness (usage, normalisation, how to re-capture expected outputs, known-gaps format) in tests/psql/README.md
-- [ ] T022 Tear down all containers (scripts/ministack-down.sh; remove the postgres:16 fallback container)
-- [ ] T023 Check committed files for machine-specific paths/hostnames and attribution; commit on 003-t1-testing
+- [x] T022 Tear down all containers (scripts/ministack-down.sh; remove the postgres:16 fallback container)
+- [x] T023 Check committed files for machine-specific paths/hostnames and attribution; commit on 003-t1-testing
 
 ## Phase 7: Reconcile (after M1) — DEFERRED, needs the micro-dsql binary
 
@@ -95,3 +95,9 @@ from micro-dsql.
 
 MVP = Phases 1–3 (layer 1 green against MiniStack). Then probes and the differential report, then
 polish. Phase 7 is executed by the post-M1 reconcile step.
+
+## Phase 8: Convergence
+
+- [x] T031 Document the `--capture` option and the `CAPTURED` status of tests/psql/run.sh in specs/003-t1-testing/contracts/run-sh.md per plan: contracts (unrequested)
+- [x] T032 Align the Result statuses in specs/003-t1-testing/data-model.md with run.sh (PASS/FAIL/SKIP/MATCH/DIFFER/CAPTURED; no ERROR) per plan: data model (partial)
+- [x] T033 Update specs/003-t1-testing/contracts/report-format.md §4 to say expected-output diffs are shown only when the A/B diff does not already show them per FR-010 (partial)
