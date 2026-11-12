@@ -114,15 +114,15 @@ multi-statement strings; residual contention retried, else OC001.
 
 ### Tests (write first, must fail)
 
-- [ ] T030 [P] [US3] In `tests/occ/snapshot.rs`: S1d for `BEGIN`, `BEGIN ISOLATION LEVEL REPEATABLE READ`, `START TRANSACTION`, `BEGIN READ ONLY` — the read after a concurrent commit returns the old value; a following write of that row ends in OC000 at COMMIT
-- [ ] T031 [P] [US3] In `tests/occ/snapshot.rs`: `BEGIN`; concurrent autocommit commit; `CREATE TABLE`; `COMMIT` succeeds (FR-021, E-P4/E-P10b); `BEGIN READ ONLY` + DDL keeps the engine's refusal
-- [ ] T032 [P] [US3] In `tests/occ/snapshot.rs`: the pin is invisible — `BEGIN` returns tag `BEGIN`, no rows; row counters, DDL/DML discipline and `25P02` behaviour are unchanged (`20_txn`-style sequence); with `snapshot_at_begin: false` S1d sees the new value (FR-023)
-- [ ] T033 [P] [US3] Policy unit tests in `crates/policy/src/session.rs`: `mark_pinned` + DDL plan first → `needs_fresh_snapshot` true; after any other statement → false; DML first → false
+- [x] T030 [P] [US3] In `tests/occ/snapshot.rs`: S1d for `BEGIN`, `BEGIN ISOLATION LEVEL REPEATABLE READ`, `START TRANSACTION`, `BEGIN READ ONLY` — the read after a concurrent commit returns the old value; a following write of that row ends in OC000 at COMMIT
+- [x] T031 [P] [US3] In `tests/occ/snapshot.rs`: `BEGIN`; concurrent autocommit commit; `CREATE TABLE`; `COMMIT` succeeds (FR-021, E-P4/E-P10b); `BEGIN READ ONLY` + DDL keeps the engine's refusal
+- [x] T032 [P] [US3] In `tests/occ/snapshot.rs`: the pin is invisible — `BEGIN` returns tag `BEGIN`, no rows; row counters, DDL/DML discipline and `25P02` behaviour are unchanged (`20_txn`-style sequence); with `snapshot_at_begin: false` S1d sees the new value (FR-023)
+- [x] T033 [P] [US3] Policy unit tests in `crates/policy/src/session.rs`: `mark_pinned` + DDL plan first → `needs_fresh_snapshot` true; after any other statement → false; DML first → false
 
 ### Implementation
 
-- [ ] T034 [US3] Add `SessionPolicy::{mark_pinned, needs_fresh_snapshot}` in `crates/policy/src/session.rs` / `crates/policy/src/occ.rs`; T033 passes
-- [ ] T035 [US3] In `crates/server/src/occ.rs`: after a successful `Txn(Begin)` plan that left the engine Active, run `PIN_SQL` (errors logged at debug and ignored) and `mark_pinned()`; before running a plan with `needs_fresh_snapshot`, run `ROLLBACK` and `begin_sql()` (no pin), log `snapshot re-opened for DDL`; also pin the transaction re-opened by T026; T030–T032 pass
+- [x] T034 [US3] Add `SessionPolicy::{mark_pinned, needs_fresh_snapshot}` in `crates/policy/src/session.rs` / `crates/policy/src/occ.rs`; T033 passes
+- [x] T035 [US3] In `crates/server/src/occ.rs`: after a successful `Txn(Begin)` plan that left the engine Active, run `PIN_SQL` (errors logged at debug and ignored) and `mark_pinned()`; before running a plan with `needs_fresh_snapshot`, run `ROLLBACK` and `begin_sql()` (no pin), log `snapshot re-opened for DDL`; also pin the transaction re-opened by T026; T030–T032 pass
 
 ---
 

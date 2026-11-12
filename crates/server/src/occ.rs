@@ -10,7 +10,9 @@
 use std::sync::{Mutex, MutexGuard};
 use std::time::{Duration, Instant};
 
-use micro_dsql_policy::{EngineFailure, SessionPolicy, StatementClass, StatementPlan, TxnStatus};
+use micro_dsql_policy::{
+    EngineFailure, SessionPolicy, StatementClass, StatementPlan, TxnControl, TxnStatus,
+};
 use pgwire::api::portal::Format;
 use pgwire::error::{PgWireError, PgWireResult};
 use tracing::debug;
@@ -48,7 +50,6 @@ pub(crate) trait Engine {
 }
 
 /// The read that fixes a transaction's snapshot: any table read does, this one returns nothing.
-#[allow(dead_code)] // used by the snapshot pin
 pub(crate) const PIN_SQL: &str = "SELECT 1 FROM pg_catalog.pg_class LIMIT 0";
 
 /// How long contention for the engine's exclusive lock is retried.
@@ -147,12 +148,30 @@ fn implicit_transaction(
     })
 }
 
+/// Fixes the snapshot of the open transaction: the engine takes it at the first table read, and
+/// any table read does, so this one (which returns no rows) makes `BEGIN` the point in time.
+/// A failing pin is ignored: the transaction then behaves as it did without it.
+fn pin(conn: &PgConnection, policy: &Mutex<SessionPolicy>) {
+    match exec(conn, PIN_SQL) {
+        Ok(()) => lock(policy).mark_pinned(),
+        Err(error) => debug!(?error, "snapshot pin failed"),
+    }
+}
+
 /// Re-opens the engine transaction of the client after a rollback: its own `BEGIN` text (so
 /// options such as `READ ONLY` survive), and, when the snapshot is taken at `BEGIN`, the pin.
-fn reopen(conn: &PgConnection, policy: &Mutex<SessionPolicy>) -> PgWireResult<()> {
+fn reopen(
+    conn: &PgConnection,
+    policy: &Mutex<SessionPolicy>,
+    opts: &OccOptions,
+) -> PgWireResult<()> {
     rollback(conn);
     let begin = lock(policy).begin_sql().unwrap_or("BEGIN").to_owned();
-    exec(conn, &begin)
+    exec(conn, &begin)?;
+    if opts.snapshot_at_begin {
+        pin(conn, policy);
+    }
+    Ok(())
 }
 
 /// A statement of an explicit transaction that hit a write conflict (DSQL reports it at
@@ -162,18 +181,19 @@ fn reopen(conn: &PgConnection, policy: &Mutex<SessionPolicy>) -> PgWireResult<()
 fn defer_conflict(
     conn: &PgConnection,
     policy: &Mutex<SessionPolicy>,
+    opts: &OccOptions,
     engine: &mut dyn Engine,
     sql: &str,
     conflict: PgWireError,
 ) -> PgWireResult<(Outcome, u64)> {
     debug!("deferred conflict");
-    if reopen(conn, policy).is_err() {
+    if reopen(conn, policy, opts).is_err() {
         return Err(conflict);
     }
     lock(policy).mark_doomed();
     match engine.run(sql) {
         Err(second) if failure_of(&second) == Some(EngineFailure::DataConflict) => {
-            reopen(conn, policy)?;
+            reopen(conn, policy, opts)?;
             engine.empty(sql)
         }
         other => other,
@@ -199,7 +219,7 @@ fn run_wrapped(
         {
             match engine.run(sql) {
                 Err(error) if failure_of(&error) == Some(EngineFailure::DataConflict) => {
-                    defer_conflict(conn, policy, engine, sql, error)
+                    defer_conflict(conn, policy, opts, engine, sql, error)
                 }
                 other => other,
             }
@@ -217,9 +237,32 @@ pub(crate) fn run(
     opts: &OccOptions,
     engine: &mut dyn Engine,
 ) -> PgWireResult<Outcome> {
-    dsql::run_planned(conn, policy, plan, format, |sql| {
+    // A DDL statement as the first statement of a pinned transaction runs on a fresh,
+    // unpinned snapshot: the engine refuses DDL on a snapshot that is out of date (E-P4).
+    // Nothing but the pin has run, so nothing is lost by re-opening.
+    if opts.snapshot_at_begin
+        && plan.refusal.is_none()
+        && dsql::txn_status(conn) == TxnStatus::Active
+        && lock(policy).needs_fresh_snapshot(plan)
+    {
+        debug!("snapshot re-opened for DDL");
+        let begin = lock(policy).begin_sql().unwrap_or("BEGIN").to_owned();
+        rollback(conn);
+        exec(conn, &begin)?;
+    }
+    let result = dsql::run_planned(conn, policy, plan, format, |sql| {
         run_wrapped(conn, policy, plan, opts, engine, sql)
-    })
+    });
+    // The snapshot of a transaction is fixed when it begins.
+    if result.is_ok()
+        && opts.snapshot_at_begin
+        && plan.class == StatementClass::Txn(TxnControl::Begin)
+        && dsql::txn_status(conn) == TxnStatus::Active
+        && lock(policy).begin_sql().is_some()
+    {
+        pin(conn, policy);
+    }
+    result
 }
 
 /// What a multi-statement string produced: the outcomes of the statements that ran, then the
