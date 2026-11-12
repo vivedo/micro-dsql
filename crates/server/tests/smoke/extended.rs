@@ -179,10 +179,11 @@ async fn numeric_columns_are_numeric() {
 async fn foreign_keys_are_enforced() {
     let server = TestServer::start();
     let c = server.connect().await;
+    // One DDL per statement: DSQL refuses two in one query string.
+    rows(&c, "CREATE TABLE parent (id int PRIMARY KEY)").await;
     rows(
         &c,
-        "CREATE TABLE parent (id int PRIMARY KEY); \
-         CREATE TABLE child (id int PRIMARY KEY, pid int REFERENCES parent(id) ON DELETE CASCADE)",
+        "CREATE TABLE child (id int PRIMARY KEY, pid int REFERENCES parent(id) ON DELETE CASCADE)",
     )
     .await;
     assert_eq!(
