@@ -200,6 +200,11 @@ pub fn shape_error(sqlstate: &str, message: &str, has_table: bool, sql: &str) ->
                 shaped.position = Some(sql.trim_end().chars().count() + 1);
             }
         }
+        "3B001" => {
+            if let Some(name) = message.strip_prefix("no such savepoint: ") {
+                shaped.message = format!("savepoint \"{}\" does not exist", name.trim());
+            }
+        }
         code if code.starts_with("23") && has_table => {
             shaped.schema = Some("public".to_owned());
         }
@@ -369,6 +374,14 @@ mod tests {
         );
         assert_eq!(e.message, "relation \"t1_no_such_table\" does not exist");
         assert_eq!(e.position, Some(15));
+    }
+
+    #[test]
+    fn missing_savepoint_reads_like_postgres() {
+        let e = shape_error("3B001", "no such savepoint: sp1", false, "ROLLBACK TO sp1");
+        assert_eq!(e.message, "savepoint \"sp1\" does not exist");
+        // Other 3B001 texts are untouched.
+        assert_eq!(shape_error("3B001", "other", false, "x").message, "other");
     }
 
     #[test]

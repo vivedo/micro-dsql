@@ -824,3 +824,20 @@ async fn statements_the_engine_limits_are_not_refused_by_a_rule() {
         }
     }
 }
+
+#[tokio::test]
+async fn rollback_to_a_savepoint_in_the_aborted_block_reads_like_postgres() {
+    let server = TestServer::start();
+    let c = server.connect().await;
+    for proto in PROTOS {
+        proto.ok(&c, "BEGIN").await;
+        proto.err(&c, "SAVEPOINT sp1").await;
+        // The block is aborted: the engine answers, with PostgreSQL's text.
+        assert_eq!(
+            proto.err(&c, "ROLLBACK TO SAVEPOINT sp1").await,
+            e("3B001", "savepoint \"sp1\" does not exist"),
+            "{proto:?}"
+        );
+        proto.ok(&c, "ROLLBACK").await;
+    }
+}
