@@ -758,6 +758,11 @@ fn describe(
     statement: &PgStatement,
     format: &Format,
 ) -> PgWireResult<Vec<FieldInfo>> {
+    // A statement the policy refuses has no result; Execute reports the refusal (the engine
+    // might not even prepare it, e.g. COPY ... FROM STDIN or DO).
+    if statement.plan.refusal.is_some() && dsql::txn_status(conn) != TxnStatus::Aborted {
+        return Ok(vec![]);
+    }
     match statement.active_intercept(conn) {
         Some(Intercept::Show { column, .. }) => Ok(show_fields(column, format)),
         Some(_) => Ok(vec![]),
