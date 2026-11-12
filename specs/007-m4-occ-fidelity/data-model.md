@@ -29,13 +29,27 @@ Active{doomed} ──other error──► Aborted ──ROLLBACK/COMMIT──►
 Active{pinned, !touched} ──DDL──► server: ROLLBACK; BEGIN(begin_sql) ──► Active{!pinned} ──► DDL runs
 ```
 
-### Implicit transaction
+### Implicit transactions
+
+Single autocommit DML (inside the engine closure; the policy only sees `Idle` before and after and
+never creates a `TxnState` for it):
 
 ```text
-Idle ──autocommit DML──► (BEGIN) Active{implicit} ──stmt ok, rows ≤ limit──► (COMMIT) Idle
-                                                ──Busy──► (ROLLBACK) retry ≤ attempts / budget
-                                                ──error / rows > limit──► (ROLLBACK) Idle + error
+Idle ──autocommit DML──► (BEGIN) ──stmt ok, rows ≤ limit──► (COMMIT) Idle
+                                ──Busy──► (ROLLBACK) retry within BUSY_RETRY
+                                ──error / rows > limit──► (ROLLBACK) Idle + error
 ```
+
+Multi-statement string with DML or DDL (`occ::run_batch`; the policy tracks it as a `TxnState`
+with `occ.implicit = true`, so discipline and row counting apply per statement):
+
+```text
+Idle ──string──► (BEGIN) begin_implicit ──each stmt ok──► (COMMIT) failed(Idle)/complete → Idle
+                                       ──any error──► (ROLLBACK) failed(Idle) → Idle + error
+```
+
+Internal transaction for one client DDL statement (006's rebuild, via
+`occ::internal_transaction`): unpinned, never doomed, retried as a whole on `Busy`.
 
 ## LockingRead (policy, new; field `locking` of `StatementPlan`)
 
@@ -60,8 +74,10 @@ with a `FOR UPDATE`/`FOR KEY SHARE` clause → `locking_read_form` refusal (`0A0
 |---|---|---|
 | `defer_conflicts` | `true` | doomed-transaction shim (FR-016) |
 | `snapshot_at_begin` | `true` | pin read after BEGIN (FR-023) |
-| `busy_retry_attempts` | `10` | autocommit attempts on lock contention (FR-003) |
-| `busy_retry_budget` | `200 ms` | total back-off time across attempts |
+
+Busy retry is not an option: the constant `occ::BUSY_RETRY = { attempts: 10, budget: 200 ms }`
+bounds every retry (autocommit DML attempt, autocommit DDL statement, internal transaction), because
+006's `constraints::in_internal_transaction` has no access to the server options.
 
 ## Conflict matrix cells (test data, tests/occ/)
 

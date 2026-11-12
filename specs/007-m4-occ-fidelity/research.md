@@ -67,19 +67,57 @@ from the MiniStack reference only by the `0A000` refusals of `FOR UPDATE`, `FOR 
 | E-P7 `INSERT … SELECT` and full-table UPDATE inside a transaction | `n_change` = rows changed (2 and 2) → usable for the autocommit row limit |
 | E-P8 A: DELETE parent 2; B: INSERT child → parent 2; both commit | **both commit; an orphan child remains** (FK checks read B's snapshot; no key-share) |
 
+### 1.3 Re-run after merging feature 006 (`main` at `3370541`, same Turso pin)
+
+The engine probes were re-run on the merged tree (scratch test, not committed); results are the
+same in kind, counts vary run to run:
+
+| Probe | Before (§1.2) | After the 006 merge |
+|---|---|---|
+| E-P2a plain autocommit storm | 391 `55P03` | 395 `55P03` (193 inserts, 202 updates) |
+| E-P2b wrapped storm | 0 Busy, 147 WWC | 0 Busy, 129 WWC (hot row only) |
+| E-P9 wrapped + DDL thread, with retry | 0 Busy left | 0 Busy left (11 retried) |
+| E-P3 / E-P10 pin read | table read pins, `SELECT 1` does not | same |
+| E-P4 pinned + concurrent commit + DDL | `55P03` | same |
+
+What changed in the server (read in the merged code): every admitted statement now goes through
+`dsql::run_planned` → `dsql::dispatch`, which sends job statements (`plan.job`) to
+`sys::run_job_statement`, DDL with extra steps (`plan.ddl` or a non-empty `plan.prelude`) to
+`ddl::run_ddl_statement`, and everything else to the caller's engine closure. `ddl.rs` runs the
+identity prelude and compensates it with `plan.cleanup_on_failure` when Idle;
+`constraints::rebuild_with_constraint` (NOT VALID) wraps its steps in
+`constraints::in_internal_transaction` (internal `BEGIN`/`COMMIT` when Idle, the client's
+transaction otherwise). Statements answered with their own tag (`Outcome::TaggedRows`,
+`execute_with_own_tag`, `send_rows_with_own_tag`) are job statements only (DDL/`CALL`). Autocommit
+DML still runs as one engine autocommit statement; the M2 gaps (row limit, multi-statement
+atomicity) and the `LockBusy → OC000` mapping are unchanged.
+
 ## 2. Decisions
 
 ### D1 — Item 1, autocommit DML: **doable in our layer**
 
 - **Decision**: the server runs every autocommit DML statement (class `Dml`, plus `SELECT … FOR
   UPDATE`, see D4) as `BEGIN` → statement → `COMMIT` on the same engine connection, all inside the
-  one blocking call that runs the statement. The PostgreSQL `BEGIN` already compiles to Turso's
+  one blocking call that runs the statement. The wrapper lives **inside the engine closure** that
+  `occ::run` hands to `dsql::run_planned` (the same pattern as 006's
+  `in_internal_transaction`), so the policy sees `Idle` before and after and `complete`/`failed`
+  run once, as today; a `BEGIN` issued before `run_planned` would make `complete` treat the DML as
+  a transaction opener. The PostgreSQL `BEGIN` already compiles to Turso's
   `BEGIN CONCURRENT` (the literal `BEGIN CONCURRENT` is a syntax error through our server, S9), so no
   new engine syntax is needed. On any error the server runs `ROLLBACK` and reports the error.
 - **Evidence**: E-P2a vs E-P2b: 391 → 0 `55P03` with disjoint inserts never failing.
 - **Residual contention**: E-P2c/E-P9 show `Busy` remains while a DDL transaction holds the
-  exclusive lock. Bounded transparent retry (E-P9: 0 Busy left) handles it for autocommit, where a
-  failed attempt has applied nothing. Inside an explicit transaction a retry is not safe; there,
+  exclusive lock, for DML and for DDL. Bounded transparent retry (E-P9: 0 Busy left) handles it for
+  autocommit, where a failed attempt has applied nothing:
+  - autocommit DML: the whole `BEGIN … COMMIT` attempt is retried;
+  - autocommit DDL: the client's own engine statement (the closure `dispatch` calls, also from
+    `sys::run_job_statement` and `ddl::run_ddl_statement`) is retried; 006's server-issued steps
+    before it (identity prelude) stay applied across attempts and are compensated by `ddl.rs` only
+    if the statement finally fails; steps after it (`sys.jobs` row, sequence DROP) are not retried;
+  - micro-dsql's own internal transaction for a client DDL (`in_internal_transaction`, the NOT VALID
+    rebuild) is retried as a whole (it rolls back on any error, so nothing is applied);
+  - retry bound: a constant `occ::BUSY_RETRY` (10 attempts, ≤ 200 ms of back-off), not an option,
+    because `in_internal_transaction` has no access to the server options. Inside an explicit transaction a retry is not safe; there,
   and when the retry budget is spent, `LockBusy` is shaped as OC001 (spec clarification 5): the
   only observed cause is a concurrent schema change, and every DSQL retry wrapper retries OC001.
 - **Mapping change**: `shape_engine_error` maps `EngineFailure::LockBusy` to `oc001()` instead of
@@ -89,7 +127,10 @@ from the MiniStack reference only by the `0A000` refusals of `FOR UPDATE`, `FOR 
   (E-P7); over the limit → `ROLLBACK` + `54000`. The `values_rows` pre-check is kept as a cheap early
   refusal.
 - **Multi-statement strings (M2 gap)**: an idle simple-protocol string of ≥ 2 statements without
-  transaction control is wrapped in one `BEGIN … COMMIT`; the policy tracks it as an *implicit*
+  transaction control that contains DML or DDL is wrapped in one `BEGIN … COMMIT` (orchestrator
+  decision; M2's `check_batch` already limits it to one DDL and no DDL with DML; inside it 006's
+  `ddl.rs` sees an Active session and leaves undo to the `ROLLBACK`, and
+  `in_internal_transaction` joins the open transaction); the policy tracks it as an *implicit*
   transaction (so the discipline rules and row counting apply exactly as `check_batch` predicted).
   Conflicts in an implicit transaction are reported at the statement (no deferral: the client sees
   them at the end of the same query, which is DSQL's COMMIT point). Not retried on Busy (earlier
@@ -146,7 +187,11 @@ from the MiniStack reference only by the `0A000` refusals of `FOR UPDATE`, `FOR 
 - **Over-approximation**: `LIMIT`/`ORDER BY`/`OFFSET` are ignored for the touch (all rows matching
   `WHERE` are touched) — documented.
 - **Refused forms**: locking clauses on joins, subqueries, CTEs, set operations, or with several
-  `OF` relations → `0A000` (new rule `locking_read_form`; text from micro-dsql, no live record).
+  `OF` relations → `0A000` (new rule `locking_read_form`), one generic text `locking clause is only
+  supported on a single-table SELECT`. No live-DSQL or Dreamescaper record names these forms
+  (research/01 §2 only says multi-table FOR UPDATE is supported since Aug 2026; 005's
+  rule-catalogue has only `unsupported_locking`); if one appears, its text wins (orchestrator
+  decision).
   `FOR SHARE`/`FOR NO KEY UPDATE` keep M2's rule.
 - **FOR KEY SHARE**: accepted (same forms) and run as the read only; DSQL's KEY SHARE conflicts
   (vs DELETE / key UPDATE) need a read-lock set validated at commit inside `turso_core` MVCC
@@ -168,7 +213,7 @@ touch column. `patch-crate` is not wired by this feature. Seam with 006: if 006 
 ### D6 — Switches
 
 `ServerOptions` gains `occ: OccOptions { defer_conflicts: bool (true), snapshot_at_begin: bool
-(true), busy_retry_attempts: u32 (10), busy_retry_budget: Duration (200 ms) }`. No CLI flag.
+(true) }`. No CLI flag. The busy-retry bound is the constant `occ::BUSY_RETRY` (D1).
 
 ### D7 — Where the OCC suite lives
 
@@ -181,3 +226,34 @@ harness (`crates/server/tests/smoke/common.rs`) via `#[path]`. Runs in `cargo te
 Value per effort, per the description: D1 (autocommit, row limit, multi-statement) → D2 → D3 → D4.
 Each is behind its own failing tests; the suite's matrix scenarios are written first and marked
 `KNOWN-GAP` only if a later item is abandoned (Principle V).
+
+### D9 — Seam with 006's internal transaction (006 T080)
+
+- **Decision**: `constraints::in_internal_transaction` keeps its name and signature shape but its
+  Idle branch delegates to `occ::internal_transaction(conn, steps)`: unpinned `BEGIN`, the steps,
+  `COMMIT`, `ROLLBACK` on any error, whole-transaction retry on `LockBusy` within `BUSY_RETRY`.
+  `steps` becomes `FnMut` (the rebuild closure only borrows, so this is a signature change, not a
+  logic change). Inside a client transaction it is unchanged (the client's transaction, pinned or
+  not; a DDL as first statement has already been given a fresh unpinned transaction by
+  `needs_fresh_snapshot`).
+- **Why unpinned**: the rebuild is DDL; a pinned snapshot makes DDL fail with `Busy` after any
+  concurrent commit (E-P4). Its `BEGIN` is issued immediately before the steps, so there is no
+  window to pin anyway.
+- **Not a doomed candidate**: data conflicts inside the internal transaction are reported at once
+  (it is micro-dsql's own transaction for one client statement, like an implicit one).
+- **Not wrapped twice**: the client statement is DDL, so `occ::run` never puts the DML wrapper
+  around it; only the engine-statement retry and this internal retry apply.
+
+### D10 — Interaction with 006's other paths
+
+- `dsql::dispatch` stays as 006 left it; 007 adds no branch to it. `occ::run` passes its wrapped
+  engine closure through `run_planned`, so job and DDL plans receive the retry wrapper as their
+  `run_engine`.
+- `Outcome::TaggedRows` / `execute_with_own_tag` are reached only by job statements (DDL, `CALL`),
+  which are never deferred or wrapped as DML; `Engine::empty` (the doomed re-conflict result) only
+  builds `Rows`/`Command` outcomes. The extended-protocol path of autocommit DML is `on_execute` →
+  `_on_execute` → `do_query` → `occ::run`, the same entry as the simple protocol.
+- Describe of a `FOR UPDATE` statement prepares `plan.engine_sql` (the read), which is what 006's
+  describe already does for plans the engine runs.
+- `ddl::compensate` runs only when Idle; in a wrapped multi-statement string the session is Active,
+  so undo is the wrapper's `ROLLBACK` (consistent with 006's design).

@@ -9,9 +9,10 @@ behaviour. Extends specs/005-m2-dsql-rules/contracts/policy-api.md (§6 seams).
 |---|---|---|---|
 | Autocommit DML, no conflict | normal | — | `I` |
 | Autocommit DML, data conflict | `40001` `change conflicts with another transaction (OC000)` | — | `I` |
-| Autocommit DML, contention persists past retries | `40001` `schema has been updated by another transaction (OC001)` | — | `I` |
+| Autocommit DML or DDL, contention persists past retries | `40001` `schema has been updated by another transaction (OC001)` | — | `I` |
+| Autocommit DDL, contention in a server-issued step after the statement (006: `sys.jobs` row, sequence DROP) | `40001` OC001 | — | `I` |
 | Autocommit DML, > 3,000 rows | `54000` `transaction row limit exceeded`, nothing applied | — | `I` |
-| Multi-statement string, statement k fails | statements < k: normal responses; k: its error; nothing applied | — | `I` |
+| Multi-statement string (no txn control, with DML or DDL), statement k fails | statements < k: normal responses; k: its error; nothing applied | — | `I` |
 | Explicit txn, write conflict (defer on) | normal result of the replay (or tag with 0 rows) | `40001` OC000; all rolled back | `I` |
 | Explicit txn, write conflict (defer off) | `40001` OC000; block aborted | answers `ROLLBACK` | `I` |
 | Explicit txn, conflict detected at COMMIT | normal | `40001` OC000 | `I` |
@@ -19,7 +20,7 @@ behaviour. Extends specs/005-m2-dsql-rules/contracts/policy-api.md (§6 seams).
 | Explicit txn, lock contention at a statement | `40001` OC001; block aborted | answers `ROLLBACK` | `I` |
 | `SELECT … FOR UPDATE` (accepted form) | rows of the plain SELECT | conflicts as if the rows were written | — |
 | `SELECT … FOR KEY SHARE` (accepted form) | rows of the plain SELECT | never conflicts | — |
-| locking clause on an unsupported form | `0A000` `locking clause is only supported on a single-table SELECT` | — | — |
+| locking clause on an unsupported form | `0A000` `locking clause is only supported on a single-table SELECT` (rule `locking_read_form`; a live-DSQL or Dreamescaper text replaces it if one is ever recorded) | — | — |
 
 `55P03` never reaches a client.
 
@@ -71,8 +72,6 @@ without an engine.
 pub struct OccOptions {
     pub defer_conflicts: bool,          // default true
     pub snapshot_at_begin: bool,        // default true
-    pub busy_retry_attempts: u32,       // default 10
-    pub busy_retry_budget: Duration,    // default 200 ms
 }
 pub struct ServerOptions { pub limits: PolicyLimits, pub occ: OccOptions }   // Default derives
 
@@ -90,7 +89,22 @@ pub(crate) fn run_batch(conn: &PgConnection, policy: &Mutex<SessionPolicy>, plan
                         -> PgWireResult<Vec<Outcome>>;
 pub(crate) fn failure_of(error: &PgWireError) -> Option<EngineFailure>;
 pub(crate) const PIN_SQL: &str = "SELECT 1 FROM pg_catalog.pg_class LIMIT 0";
+pub(crate) struct BusyRetry { pub attempts: u32, pub budget: Duration }
+pub(crate) const BUSY_RETRY: BusyRetry = BusyRetry { attempts: 10, budget: Duration::from_millis(200) };
+/// Idle only: unpinned BEGIN, steps, COMMIT; ROLLBACK on error; whole retry on LockBusy.
+pub(crate) fn internal_transaction<T>(conn: &PgConnection,
+                                      steps: impl FnMut() -> PgWireResult<T>) -> PgWireResult<T>;
+
+// crates/server/src/constraints.rs (006, changed by 007)
+pub(crate) fn in_internal_transaction<T>(conn: &PgConnection,
+                                         steps: impl FnMut() -> PgWireResult<T>) -> PgWireResult<T>;
+//   Active/Aborted: unchanged (runs in the client's transaction);
+//   Idle: occ::internal_transaction(conn, steps)
 ```
+
+`occ::run` does not change `dsql::run_planned`/`dsql::dispatch` (006): job and DDL plans get the
+wrapped engine closure as their `run_engine`, so the client's own engine statement is retried on
+`LockBusy` while Idle; 006's server-issued steps keep using `internal::exec` unwrapped.
 
 Engine statements the server issues on its own: `BEGIN`, the client's BEGIN text, `COMMIT`,
 `ROLLBACK`, `PIN_SQL`, rendered touches. They never pass through `SessionPolicy::admit` and are

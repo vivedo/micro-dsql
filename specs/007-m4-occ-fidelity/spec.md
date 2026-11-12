@@ -53,6 +53,12 @@ this session; lower-impact gaps found by the coverage scan are resolved in Assum
 - Q: Are `NOWAIT` and `SKIP LOCKED` accepted with FOR UPDATE / FOR KEY SHARE? → A: Yes, as no-ops (there are no locks to wait for), matching the MiniStack reference in `tests/psql/probes/expected/26_locking_reads.out`.
 - Q: What does a client see when lock contention remains (only under a concurrent schema change)? → A: Autocommit statements retry transparently for a bounded time; contention that remains, or occurs inside an explicit transaction, is reported as `40001` OC001, never `55P03`.
 
+### Session 2026-11-12 (orchestrator decisions after feature 006 was merged)
+
+- Q: Is autocommit DDL that meets lock contention retried too? → A: Yes, bounded like DML, including the transactions micro-dsql opens itself for a client DDL statement (006's NOT VALID table rebuild).
+- Q: Which multi-statement strings run as one implicit transaction? → A: Every idle string of two or more statements without transaction control that contains DML or DDL.
+- Q: Which text refuses a locking clause on an unsupported form? → A: One generic text, unless a live-DSQL or Dreamescaper record names the form (none does today: research/01 §2, 005's rule catalogue); then that record's text.
+
 ## User Scenarios & Testing *(mandatory)*
 
 ### User Story 1 - Autocommit writes behave like single-statement DSQL transactions (Priority: P1)
@@ -86,9 +92,11 @@ updates of one hot row) at once; no statement fails except hot-row updates, and 
    the error is that statement's error.
 5. **Given** another session holding an uncommitted write to a row, **When** an autocommit
    statement writes the same row, **Then** it fails with OC000 (never `55P03`).
-6. **Given** a concurrent schema change in progress, **When** an autocommit statement meets lock
-   contention, **Then** it is retried transparently and either succeeds or fails with `40001`
-   (OC001), never `55P03`.
+6. **Given** a concurrent schema change in progress, **When** an autocommit DML or DDL statement
+   meets lock contention, **Then** it is retried transparently and either succeeds or fails with
+   `40001` (OC001), never `55P03`.
+7. **Given** the extended protocol (Parse/Bind/Execute), **When** autocommit DML runs, **Then** it
+   behaves exactly as in scenarios 1–5.
 
 ---
 
@@ -212,10 +220,15 @@ statement fails, with which SQLSTATE and text, and the final data.
   statement reports 0 rows; COMMIT still fails with OC000.
 - Autocommit DML that fails for a non-conflict reason (`23505`, `23503`, `22xxx`): same error and
   SQLSTATE as today, nothing applied, session idle.
-- Autocommit statements that are not DML (reads, DDL, `SET`, `SHOW`) keep today's execution, except
-  that DDL meeting lock contention is retried like DML.
+- Autocommit statements that are not DML (reads, DDL, `SET`, `SHOW`) are not wrapped in a
+  transaction by micro-dsql (DDL keeps its own engine transaction, and 006's rebuild its internal
+  one), but DDL meeting lock contention is retried like DML (FR-003).
 - A multi-statement string that contains `BEGIN`/`COMMIT`/`ROLLBACK` keeps today's per-statement
-  behaviour; one with a single DDL runs as today (DDL with DML is already refused by M2).
+  behaviour; a string with one DDL plus reads or session statements runs as one implicit
+  transaction (two DDLs, or DDL with DML, are already refused as a whole by M2).
+- An autocommit DDL statement with server-side extra steps (006: identity prelude, `sys.jobs` row,
+  sequence cleanup) is retried only while its client statement has not reached the engine
+  successfully; contention in a later server-issued step is reported as OC001 after compensation.
 - Extended protocol: each `Execute` of a DML portal outside a transaction is its own single-
   statement transaction.
 - `SELECT … FOR UPDATE` outside a transaction runs as a single-statement transaction.
@@ -236,8 +249,9 @@ statement fails, with which SQLSTATE and text, and the final data.
   at all, and its conflicts are first-committer-wins against other transactions.
 - **FR-002**: Autocommit DML MUST NOT fail because other sessions are concurrently writing other
   rows (no `55P03`, no OC000 for disjoint writes).
-- **FR-003**: When autocommit execution meets engine lock contention, micro-dsql MUST retry the
-  statement transparently for a bounded time (default: up to 10 attempts, at most about 200 ms in
+- **FR-003**: When autocommit execution of a DML or DDL statement (including a transaction
+  micro-dsql opens itself for one client DDL statement) meets engine lock contention, micro-dsql
+  MUST retry the statement transparently for a bounded time (default: up to 10 attempts, at most about 200 ms in
   total) before reporting an error; nothing is applied by a failed attempt.
 - **FR-004**: The client MUST never receive SQLSTATE `55P03`. Lock contention that remains after
   FR-003, or occurs inside an explicit transaction, MUST be reported as `40001` with the OC001
@@ -245,11 +259,14 @@ statement fails, with which SQLSTATE and text, and the final data.
 - **FR-005**: An autocommit DML statement whose changed-row count exceeds the 3,000-row limit MUST
   fail with `54000` `transaction row limit exceeded` and leave no change, whatever its form
   (`VALUES`, `SELECT`, `UPDATE`, `DELETE`).
-- **FR-006**: A simple-protocol query string with two or more statements and no transaction-control
-  statement, run while no transaction is open, MUST run atomically as one implicit transaction:
+- **FR-006**: A simple-protocol query string with two or more statements, no transaction-control
+  statement and at least one DML or DDL statement, run while no transaction is open, MUST run
+  atomically as one implicit transaction:
   on any statement's error, nothing of the string is applied and the session ends idle.
 - **FR-007**: After an autocommit statement or implicit transaction (success or failure), the
   session MUST report idle status (`I`) and stay usable.
+- **FR-008**: Autocommit execution (FR-001–FR-005, FR-007) MUST behave the same in the simple and
+  the extended protocol.
 
 **Deferred conflicts (item 2)**
 
@@ -296,8 +313,9 @@ statement fails, with which SQLSTATE and text, and the final data.
 - **FR-033**: `SELECT … FOR KEY SHARE` on a single table (with the same optional modifiers) MUST be
   accepted and run as a plain read.
 - **FR-034**: Locking clauses on joins, subqueries, CTEs or set operations MUST be refused with
-  `0A000` and a message naming the unsupported form; `FOR SHARE` / `FOR NO KEY UPDATE` keep M2's
-  refusal.
+  `0A000` and the text `locking clause is only supported on a single-table SELECT`, unless a
+  live-DSQL or Dreamescaper record gives a text for that form (none does today); `FOR SHARE` /
+  `FOR NO KEY UPDATE` keep M2's refusal.
 
 **Suite and documentation**
 

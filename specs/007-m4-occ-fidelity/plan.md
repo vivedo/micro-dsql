@@ -4,15 +4,21 @@
 
 **Input**: Feature specification from `specs/007-m4-occ-fidelity/spec.md`
 
+**Revision**: 2026-11-12, after merging `main` with feature 006 (M3, merge `3370541`): facts
+re-checked against the merged code (research.md §1.3), seam with 006's internal transaction (D9,
+D10), DDL contention retry, FR-006 widened to DDL, FR-034 text fixed, FR-008 (extended protocol).
+
 ## Summary
 
 Make micro-dsql's optimistic concurrency look like Aurora DSQL's, entirely in micro-dsql's own
 crates (no Turso patch; evidence in [research.md](research.md) §1):
 
 1. **Autocommit DML as a single-statement transaction** (server): wrap it in `BEGIN … COMMIT`
-   (PostgreSQL `BEGIN` is already Turso's `BEGIN CONCURRENT`), retry residual lock contention for a
-   bounded time, enforce the 3,000-row limit before `COMMIT`; run idle multi-statement strings as one
-   implicit transaction. Remove M2's blanket `55P03 → OC000` mapping (residual contention → OC001).
+   (PostgreSQL `BEGIN` is already Turso's `BEGIN CONCURRENT`) inside the engine closure, retry
+   residual lock contention for a bounded time (DML and DDL, including 006's internal rebuild
+   transaction), enforce the 3,000-row limit before `COMMIT`; run idle multi-statement strings
+   that contain DML or DDL as one implicit transaction. Remove M2's blanket `55P03 → OC000` mapping
+   (residual contention → OC001).
 2. **Doomed transaction**: on a write-time data conflict inside an explicit transaction, roll back,
    re-open, re-run the statement once, flag the transaction; its `COMMIT` fails with OC000.
 3. **Snapshot at BEGIN**: a zero-row catalog read right after `BEGIN` pins the snapshot; a DDL as
@@ -28,7 +34,7 @@ every knowingly different one.
 
 | Item | Verdict | Evidence (research.md) | Residual difference |
 |---|---|---|---|
-| 1 Autocommit DML as a concurrent single-statement transaction | **Doable in our layer** | E-P2a vs E-P2b: `55P03` 391 → 0 of 1,200; E-P9: bounded retry removes the `Busy` left under concurrent DDL | Under concurrent DDL, contention inside explicit transactions → OC001 (never `55P03`) |
+| 1 Autocommit DML as a concurrent single-statement transaction | **Doable in our layer** | E-P2a vs E-P2b: `55P03` 391 → 0 of 1,200 (395 → 0 after the 006 merge, §1.3); E-P9: bounded retry removes the `Busy` left under concurrent DDL | Under concurrent DDL, contention inside explicit transactions, or in 006's server-issued steps after the client's DDL statement, → OC001 (never `55P03`) |
 | — Autocommit row limit (M2 gap) | **Fixed by item 1** | E-P7: `n_change` known before `COMMIT` | FK cascade rows still uncounted (unchanged) |
 | — Multi-statement atomicity (M2 gap) | **Fixed by item 1** | wrapper is the same mechanism | strings with explicit `BEGIN`/`COMMIT` unchanged |
 | 2 Doomed transaction (deferred OC000) | **Doable in our layer, approximate** | E-P6 (block aborted after conflict), E-P6b (rollback/begin/replay works) | later *writer* loses (DSQL: later committer); earlier writes lost and fresh snapshot after the conflict; first-writer rollback still dooms |
@@ -67,7 +73,7 @@ engine statements (`BEGIN`, `COMMIT`) per autocommit DML
 expected outputs unchanged; probe expected outputs never re-captured; tests bind port 0 (manual
 runs use 15507), never 5432; no Docker
 
-**Scale/Scope**: 2 new policy modules, 1 new server module, ~25 OCC scenarios, edits to 7 shared files
+**Scale/Scope**: 2 new policy modules, 1 new server module, ~27 OCC scenarios, edits to 8 shared files
 
 ## Constitution Check
 
@@ -91,25 +97,34 @@ existing types, one integration-test target; no new crate or dependency.
 ### Execution path
 
 ```text
-lib.rs (simple / extended) ──► occ::run(conn, policy, plan, opts, engine)          [new, 007]
+lib.rs (simple run_simple_statement / extended do_query) ──► occ::run(conn, policy, plan, opts, engine)   [new, 007]
    │
-   ├─ Idle & plan is DML or FOR UPDATE ─► implicit single-statement transaction:
-   │      loop ≤ attempts: BEGIN → dsql::run_planned(… engine') → rows ≤ limit? → COMMIT
-   │      Busy at any step: ROLLBACK, back off, retry; other error: ROLLBACK, report
-   ├─ Active, pinned, untouched & plan is DDL ─► ROLLBACK; <begin text>; then run
-   ├─ otherwise ─► dsql::run_planned(… engine')
-   │      engine' = engine wrapped with:
-   │        · FOR UPDATE: touch (column chosen from the schema) then read
-   │        · DataConflict in explicit txn & defer ─► ROLLBACK; <begin text>; pin;
-   │          mark_doomed; replay once (or empty result)
-   └─ after success: plan is BEGIN & now Active & snapshot_at_begin ─► pin read
+   ├─ Active, pinned, untouched & plan is DDL ─► ROLLBACK; <begin text> (unpinned)
+   ├─ dsql::run_planned(conn, policy, plan, format, engine')       (006's dispatch unchanged:
+   │      job → sys::run_job_statement(engine')                     engine' is what they call
+   │      ddl/prelude → ddl::run_ddl_statement(engine')             for the client's statement)
+   │      else → engine'(sql)
+   │   engine' = the engine closure wrapped with, by case:
+   │     · Idle & DML or FOR UPDATE: implicit single-statement transaction —
+   │         loop ≤ BUSY_RETRY: BEGIN → [touch] → statement → rows ≤ limit? → COMMIT;
+   │         Busy at any step: ROLLBACK, back off, retry; other error: ROLLBACK, report
+   │     · Idle & DDL: retry the statement alone on Busy (nothing applied by a failed attempt)
+   │     · Active explicit & FOR UPDATE: touch (column from the schema), then read
+   │     · Active explicit & DataConflict & defer: ROLLBACK; <begin text>; pin; mark_doomed;
+   │         replay once (second conflict → Engine::empty)
+   └─ after success: plan is BEGIN & now Active & snapshot_at_begin ─► pin read, mark_pinned
 
-simple query, Idle, ≥2 statements, no txn control, contains DML
-   ─► BEGIN; policy.begin_implicit(); each statement via occ::run; COMMIT
+constraints::in_internal_transaction (006), Idle branch ─► occ::internal_transaction:
+   unpinned BEGIN → steps (FnMut) → COMMIT; ROLLBACK on error; retry whole on Busy (BUSY_RETRY)
+
+simple query, Idle, ≥2 statements, no txn control, contains DML or DDL
+   ─► occ::run_batch: BEGIN; policy.begin_implicit(); each statement via occ::run; COMMIT
       (any error: ROLLBACK; policy.failed(Idle))
 ```
 
-`dsql::run_planned` is reused unchanged; `occ::run` wraps it and passes a wrapped engine closure.
+`dsql::run_planned` and `dsql::dispatch` are reused unchanged; the implicit transaction sits inside
+the engine closure so the policy sees `Idle` around an autocommit statement, exactly like 006's
+internal transaction (research.md D1, D10).
 
 ### Policy additions (contracts/occ-api.md)
 
@@ -131,15 +146,20 @@ simple query, Idle, ≥2 statements, no txn control, contains DML
 |---|---|
 | `policy::rewrite` (pre-parse, AST text edits), `Reply::Rows`, `sys.*` emulation, DDL rules, any `patch-crate` wiring | autocommit execution, implicit transactions, transaction start/snapshot pin, the doomed flag in `TxnState`, FOR UPDATE / FOR KEY SHARE handling, removing `LockBusy → OC000` |
 
-If 006 adds `Admission`/`Reply` variants, `occ::run` treats every non-`Run` admission by delegating
-to `dsql::run_planned` unchanged, so new variants need no 007 change.
+006 landed `Reply::Rows`, `Outcome::TaggedRows`, `execute_with_own_tag`/`send_rows_with_own_tag`
+(job statements only), `dsql::dispatch` and the `sys`, `ddl`, `constraints`, `internal` modules.
+007 adds no `Admission` variant and no `dispatch` branch; every admission still goes through
+`run_planned`. The one 006 function 007 changes is `constraints::in_internal_transaction` (006's
+T080 seam): its Idle branch delegates to `occ::internal_transaction` (research.md D9).
 
 **Shared files 007 touches** (additions kept in new functions/modules; edits listed):
 
 | File | 007 change |
 |---|---|
-| `crates/server/src/lib.rs` | `mod occ;` · `ServerOptions.occ` · pass options to the handler · replace the two `dsql::run_planned(…)` call sites by `occ::run(…)` · implicit-transaction wrapping in `run_simple_query` and `do_query` (simple protocol) · M4 entry in the header's change list |
-| `crates/server/src/dsql.rs` | none planned (the helper `failure_of(&PgWireError)` goes in `occ.rs`) |
+| `crates/server/src/lib.rs` | `mod occ;` · `ServerOptions.occ` · pass options to the handler · replace the two `dsql::run_planned(…)` call sites (`run_simple_statement`, extended `do_query`) by `occ::run(…)` · `occ::run_batch` in `run_simple_query` and the simple `do_query` · M4 entry in the header's change list (after 006's M3 entry) |
+| `crates/server/src/dsql.rs` | none planned (the helper `failure_of(&PgWireError)` goes in `occ.rs`; `run_planned`/`dispatch` unchanged) |
+| `crates/server/src/constraints.rs` (006) | `in_internal_transaction`: Idle branch → `occ::internal_transaction`; `steps: impl FnMut`; doc comment updated |
+| `crates/server/src/ddl.rs`, `sys.rs`, `internal.rs` (006) | none (they receive the wrapped engine closure through `dispatch`) |
 | `crates/server/Cargo.toml` | `[[test]] name = "occ"` |
 | `crates/policy/src/session.rs` | `TxnState` gains `occ: OccTxn`; doomed-COMMIT branch in `admit`; new methods delegating to `policy::occ` |
 | `crates/policy/src/statement.rs` | `locking` field; `engine_sql` from `LockingRead::read_sql`; refusal merge |
@@ -150,7 +170,8 @@ to `dsql::run_planned` unchanged, so new variants need no 007 change.
 New files: `crates/policy/src/occ.rs`, `crates/policy/src/locking.rs`, `crates/server/src/occ.rs`,
 `tests/occ/*.rs`, `tests/occ/README.md`.
 
-**Seam names** (for the merge): `occ::run` (server entry), `SessionPolicy::mark_doomed`,
+**Seam names**: `occ::run` (server entry), `occ::run_batch`, `occ::internal_transaction` (used by
+006's `constraints::in_internal_transaction`), `occ::BUSY_RETRY`, `SessionPolicy::mark_doomed`,
 `TxnState.occ`, `StatementPlan.locking`, `ServerOptions.occ`, `EngineFailure::LockBusy → oc001`.
 **patch-crate seam**: 007 wires none; if 006 wires it, 007 inherits it unchanged.
 
@@ -160,7 +181,8 @@ Who loses (later writer vs later committer); first-writer rollback still dooms; 
 loses its earlier writes and reads a fresh snapshot; FOR KEY SHARE never conflicts; FK key-share
 missing (orphan child, E-P8); B11 schema-wide conflicts (and OC000 on unrelated writers during DDL
 churn, E-P9); FOR UPDATE single-table / LIMIT over-touch; tables created after BEGIN invisible;
-residual contention inside explicit transactions reported as OC001.
+residual contention inside explicit transactions (or in 006's server-issued steps after a client
+DDL) reported as OC001.
 
 ## Project Structure
 

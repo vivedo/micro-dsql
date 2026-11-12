@@ -31,6 +31,7 @@ tests/psql/run.sh --probes 26_locking_reads   # report-only; should now match th
 | | `SELECT v FROM t WHERE id=2;` | | old value, not 555 |
 | FOR UPDATE | `BEGIN; SELECT v FROM t WHERE id=1 FOR UPDATE;` | `BEGIN; UPDATE t SET v=1 WHERE id=1; COMMIT;` | A's COMMIT fails OC000 (A wrote after B's touch); B commits |
 | Autocommit atomic string | `INSERT INTO t VALUES (30,0); INSERT INTO t VALUES (30,0);` | | `23505`; `SELECT count(*) FROM t WHERE id=30` = 0 |
+| Autocommit over the extended protocol | any driver with prepared statements (e.g. `psql` `\bind … \g`): `INSERT INTO t VALUES ($1, 0) \bind 31 \g` twice | | second: `23505`; session idle; same results as the simple protocol |
 | Autocommit row limit | `INSERT INTO big SELECT g FROM generate_series(1,3001) g;` | | `54000`; table unchanged |
 
 ## Owner / orchestrator checks (not automated)
