@@ -151,6 +151,11 @@ impl DbErr {
         }
     }
 
+    pub fn with_detail(mut self, detail: &str) -> Self {
+        self.detail = Some(detail.to_owned());
+        self
+    }
+
     pub fn of(error: &tokio_postgres::Error) -> Self {
         let db = error
             .as_db_error()

@@ -72,7 +72,7 @@ use turso_pg_parser::ParseResult;
 
 use micro_dsql_policy::params::Column;
 use micro_dsql_policy::{
-    Intercept, ParamHint, PolicyError, PolicyLimits, ResultHint, SessionPolicy, StatementPlan,
+    ParamHint, PolicyError, PolicyLimits, ResultHint, SessionPolicy, SettingCommand, StatementPlan,
     TxnStatus,
 };
 
@@ -319,15 +319,6 @@ impl PgStatement {
             plan: Arc::new(StatementPlan::new(&sql)),
             result_hints: shape.results,
             param_types,
-        }
-    }
-
-    /// The intercept to describe now: none inside a failed transaction block, so the engine
-    /// answers 25P02 like for any other statement.
-    fn active_intercept(&self, conn: &PgConnection) -> Option<&Intercept> {
-        match conn.transaction_state() {
-            TransactionState::Aborted => None,
-            _ => self.plan.intercept.as_ref(),
         }
     }
 }
@@ -758,19 +749,27 @@ fn describe(
     statement: &PgStatement,
     format: &Format,
 ) -> PgWireResult<Vec<FieldInfo>> {
-    // A statement the policy refuses has no result; Execute reports the refusal (the engine
-    // might not even prepare it, e.g. COPY ... FROM STDIN or DO).
-    if statement.plan.refusal.is_some() && dsql::txn_status(conn) != TxnStatus::Aborted {
-        return Ok(vec![]);
-    }
-    match statement.active_intercept(conn) {
-        Some(Intercept::Show { column, .. }) => Ok(show_fields(column, format)),
-        Some(_) => Ok(vec![]),
-        None => {
-            let stmt = conn.prepare(&statement.plan.engine_sql).map_err(pg_error)?;
-            Ok(describe_fields(&stmt, format, &statement.result_hints))
+    // Inside a failed transaction block the engine answers every statement with 25P02.
+    if dsql::txn_status(conn) != TxnStatus::Aborted {
+        let plan = &statement.plan;
+        // A statement the policy refuses has no result; Execute reports the refusal (the engine
+        // might not even prepare it, e.g. COPY ... FROM STDIN or DO).
+        if plan.refusal.is_some() {
+            return Ok(vec![]);
+        }
+        if let Some(column) = plan.show_column() {
+            return Ok(show_fields(column, format));
+        }
+        let answered_here = match &plan.setting {
+            Some(SettingCommand::ResetAll) | None => plan.intercept.is_some(),
+            Some(_) => true,
+        };
+        if answered_here {
+            return Ok(vec![]);
         }
     }
+    let stmt = conn.prepare(&statement.plan.engine_sql).map_err(pg_error)?;
+    Ok(describe_fields(&stmt, format, &statement.result_hints))
 }
 
 /// The fields of an ordinary result set, or none for commands and COPY.

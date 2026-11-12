@@ -130,11 +130,13 @@ async fn data_file_persists_across_restarts() {
 
     let running = start(&["--listen", "127.0.0.1:0", "--data", &path_str]);
     let c = client(running.addr).await;
-    c.batch_execute(
-        "CREATE TABLE kept (id int PRIMARY KEY, v text); INSERT INTO kept VALUES (1, 'still here')",
-    )
-    .await
-    .unwrap();
+    // DDL and DML are separate statements: DSQL refuses them in one query string.
+    c.batch_execute("CREATE TABLE kept (id int PRIMARY KEY, v text)")
+        .await
+        .unwrap();
+    c.batch_execute("INSERT INTO kept VALUES (1, 'still here')")
+        .await
+        .unwrap();
     drop(c);
     signal(&running.child, "TERM");
     let (status, log) = wait_exit(running);
