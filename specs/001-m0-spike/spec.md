@@ -182,3 +182,19 @@ a CONFIRMED / REFUTED / NOT TESTED line with evidence.
 - No Rust crate exists in this repo yet, so the cargo gates of Constitution Principle IV do not apply to
   this feature; the gate here is "scripts run and produce recorded results".
 - The verdict does not change the plan: the run continues on Turso and no-go reasons become M1 known gaps.
+- Decisions taken during implementation (unattended run):
+  - Seed timestamps use `+00:00` offsets because Turso rejects `+00` (alternative: keep `+00` and lose
+    most seed rows; reason: the remaining queries would measure nothing). The `+00` failure is kept as
+    probe P25.
+  - psycopg is run twice, with default `%s` (binary ints) and forced-text `%t` placeholders
+    (alternative: default only; reason: separates "driver unusable" from "usable with a setting").
+  - pgx is run in its default mode and in `QueryExecModeSimpleProtocol` (same reason).
+  - A wire-level probe (`spike/drivers/wire_probe.py`) was added to find root causes behind driver
+    failures (alternative: infer from driver errors; reason: evidence for the M1 blocker list).
+  - Homebrew could not install `libpq`/`go` in this environment, so the same bottles were unpacked
+    by hand (alternative: build from source; reason: fastest equivalent binaries). Scripts locate
+    `psql` via `PSQL`, so nothing machine-specific is committed.
+  - Python drivers use Python 3.14 in a uv-created `.venv` (system Python 3.9 is too old for
+    psycopg 3.3).
+  - Verdict CONDITIONAL GO; per the run instructions the work continues on Turso and no-go reasons
+    are listed as known gaps (research/06 §9) rather than starting the embedded-PG16 pivot.
