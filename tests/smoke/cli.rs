@@ -182,3 +182,42 @@ fn an_address_in_use_is_an_error() {
     assert!(!output.status.success());
     assert!(String::from_utf8_lossy(&output.stderr).contains("cannot listen"));
 }
+
+#[tokio::test]
+async fn stops_promptly_with_a_busy_client_connected() {
+    let running = start(&["--listen", "127.0.0.1:0"]);
+    let c = client(running.addr).await;
+    let busy = tokio::spawn(async move {
+        // Long enough to still be running when the signal arrives.
+        let _ = c
+            .simple_query(
+                "WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n \
+                 WHERE i < 100000000) SELECT count(*) FROM n",
+            )
+            .await;
+    });
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    let signalled = Instant::now();
+    signal(&running.child, "TERM");
+    let (status, log) = wait_exit(running);
+    assert!(status.success(), "{status:?} {log:?}");
+    assert!(
+        signalled.elapsed() < Duration::from_secs(5),
+        "took {:?}",
+        signalled.elapsed()
+    );
+    busy.abort();
+}
+
+#[test]
+fn an_unusable_data_path_is_an_error() {
+    let path = std::env::temp_dir()
+        .join(format!("micro-dsql-missing-dir-{}", std::process::id()))
+        .join("db.sqlite");
+    let output = Command::new(BIN)
+        .args(["--listen", "127.0.0.1:0", "--data", path.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(!output.status.success());
+    assert!(!output.stderr.is_empty());
+}

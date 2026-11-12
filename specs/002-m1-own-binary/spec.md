@@ -4,7 +4,7 @@
 
 **Created**: 2026-11-12
 
-**Status**: Draft
+**Status**: Implemented (round 1)
 
 **Input**: User description: "M1 'own binary that starts and runs' (PLAN.md §4 M1 items 1–6): own
 workspace and binary built on the pinned Turso Postgres frontend with a vendored wire server; CLI

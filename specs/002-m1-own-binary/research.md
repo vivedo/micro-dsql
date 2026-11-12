@@ -77,3 +77,18 @@ Each entry: decision, rationale, alternatives considered.
 - **Decision**: `.github/workflows/ci.yml`, matrix `macos-latest`/`ubuntu-latest`; Linux installs
   `clang libclang-dev postgresql-client`; macOS uses `libpq` from Homebrew for psql. Steps: fmt,
   clippy, test, build, start `micro-dsql --listen 127.0.0.1:15432`, run `tests/psql/run.sh`.
+
+## R13. Work beyond the spec that T1 needed (found in convergence)
+- **Error shaping** (`crates/policy/src/errors.rs`): `42P01` is reworded to
+  `relation "<name>" does not exist`, `42601` loses the engine's `Invalid statement:` prefix,
+  both get a `P` (position) field, and constraint errors get the `s` (schema) field. Without it
+  the T1 scenario `30_errors` fails against micro-dsql. Kept minimal; DSQL's own texts are M2.
+- **Extra SHOW parameters**: `in_hot_standby`, `lc_collate`, `lc_ctype` (`C`, DSQL's only
+  collation) are answered alongside the FR-009 set because they cost nothing and match DSQL.
+- **In-memory registry path**: Turso keys a process-wide database registry on the path (hash of
+  the path for memory IO), so each in-memory database gets a unique
+  `micro-dsql-memory-<pid>-<n>/postgres` path; the file stem keeps `current_database()` =
+  `postgres`. Needed for several servers in one test process.
+- **Cargo.lock seeded from upstream**: the lock file starts from Turso's `Cargo.lock` at the
+  pinned commit, so third-party versions (pg_query 6.1.1, aws-lc-sys 0.46, pgwire 0.36.3) match
+  what M0 measured; a fresh resolve picked newer ones (pg_query 6.2.1).
