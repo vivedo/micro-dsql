@@ -16,9 +16,18 @@ pub struct Rule {
     pub check: fn(&NodeEnum, &str) -> Option<PolicyError>,
 }
 
-/// The first deny rule that matches the statement.
-pub fn check_rules(node: &NodeEnum, sql: &str) -> Option<PolicyError> {
-    RULES.iter().find_map(|rule| (rule.check)(node, sql))
+/// What the pre-parse learned about the statement text (rules that need more than the AST).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct RuleContext {
+    pub async_kind: Option<crate::rewrite::AsyncKind>,
+}
+
+/// The first deny rule that matches the statement: 005's table first, then the M3 DDL rules.
+pub fn check_rules(node: &NodeEnum, sql: &str, ctx: &RuleContext) -> Option<PolicyError> {
+    RULES
+        .iter()
+        .find_map(|rule| (rule.check)(node, sql))
+        .or_else(|| crate::ddl_rules::check(node, sql, ctx))
 }
 
 fn refused(id: &'static str, message: &str) -> Option<PolicyError> {
@@ -77,7 +86,7 @@ fn persistence(node: &NodeEnum) -> Option<&str> {
 /// so the token stream is exact: string literals and comments are single tokens, which is why
 /// the rules that apply "anywhere in the statement" look at tokens instead of walking the
 /// tree (the library's node walker skips parts of it).
-fn tokens(sql: &str) -> Vec<(Token, &str)> {
+pub(crate) fn tokens(sql: &str) -> Vec<(Token, &str)> {
     let Ok(scanned) = pg_query::scan(sql) else {
         return Vec::new();
     };
@@ -293,7 +302,8 @@ mod tests {
     use super::*;
 
     fn check(sql: &str) -> Option<PolicyError> {
-        let parsed = pg_query::parse(sql).unwrap_or_else(|e| panic!("{sql}: {e}"));
+        let pre = crate::rewrite::pre_parse(sql);
+        let parsed = pg_query::parse(&pre.text).unwrap_or_else(|e| panic!("{sql}: {e}"));
         let node = parsed.protobuf.stmts[0]
             .stmt
             .as_ref()
@@ -301,7 +311,13 @@ mod tests {
             .node
             .as_ref()
             .unwrap();
-        check_rules(node, sql)
+        check_rules(
+            node,
+            &pre.text,
+            &RuleContext {
+                async_kind: pre.async_kind,
+            },
+        )
     }
 
     /// (sql, rule id, SQLSTATE, message)
@@ -647,8 +663,8 @@ mod tests {
     fn statements_dsql_supports_are_not_refused() {
         for sql in [
             "CREATE DOMAIN d AS int",
-            "CREATE INDEX i ON t (id)",
-            "CREATE UNIQUE INDEX i ON t (id)",
+            "CREATE INDEX ASYNC i ON t (id)",
+            "CREATE UNIQUE INDEX ASYNC i ON t (id)",
             "SELECT * FROM t FOR UPDATE",
             "SELECT * FROM t FOR KEY SHARE",
             "SELECT ARRAY[1, 2]",
@@ -657,15 +673,15 @@ mod tests {
             "CREATE FUNCTION f() RETURNS int LANGUAGE sql AS 'select 1'",
             "CREATE TABLE t (id int PRIMARY KEY) PARTITION BY RANGE (id)",
             "CREATE TABLE t (id int, n numeric(10,2), j jsonb, u uuid, tz timetz, i interval, b bytea, t timestamptz)",
-            "CREATE TABLE t (id int GENERATED ALWAYS AS IDENTITY)",
+            "CREATE TABLE t (id bigint GENERATED ALWAYS AS IDENTITY (CACHE 1))",
             "ALTER TABLE t ADD COLUMN c int",
             "ALTER TABLE t DROP COLUMN c",
-            "ALTER TABLE t ADD CONSTRAINT c CHECK (id > 0)",
+            "ALTER TABLE t ADD CONSTRAINT c CHECK (id > 0) NOT VALID",
             "ANALYZE t",
             "ANALYZE",
             "CREATE VIEW v AS SELECT 1",
             "CREATE TEMP VIEW v AS SELECT 1",
-            "CREATE SEQUENCE s",
+            "CREATE SEQUENCE s CACHE 1",
             "INSERT INTO t VALUES (1)",
             "UPDATE t SET a = 1",
             "DELETE FROM t",

@@ -244,6 +244,187 @@ fn find_word(sql: &str, word: &str) -> Option<usize> {
     None
 }
 
+// --- M3: DDL rules (contracts/rule-catalogue-m3.md) ---------------------------------------
+
+/// `0A000`: `CREATE INDEX CONCURRENTLY`.
+pub fn index_concurrently() -> PolicyError {
+    PolicyError::new(
+        "index_concurrently",
+        "0A000",
+        "CONCURRENTLY not supported for CREATE INDEX",
+    )
+}
+
+/// `0A000`: `CREATE INDEX` without `ASYNC`.
+pub fn index_sync() -> PolicyError {
+    PolicyError::new(
+        "index_sync",
+        "0A000",
+        "unsupported mode. please use CREATE INDEX ASYNC.",
+    )
+}
+
+/// `0A000`: an access method other than `btree`.
+pub fn index_method() -> PolicyError {
+    PolicyError::new(
+        "index_method",
+        "0A000",
+        "USING not supported for CREATE INDEX",
+    )
+}
+
+/// `54011`: more than eight key columns.
+pub fn index_key_columns() -> PolicyError {
+    PolicyError::new(
+        "index_key_columns",
+        "54011",
+        "more than 8 column keys in an index are not supported",
+    )
+}
+
+/// `0A000`: an identity column that is not `bigint` (`ty` as PostgreSQL displays it).
+pub fn identity_type(ty: &str) -> PolicyError {
+    PolicyError::new(
+        "identity_type",
+        "0A000",
+        format!("datatype {ty} not supported, identity column type must be bigint"),
+    )
+}
+
+/// `0A000`: an identity column without an explicit CACHE.
+pub fn identity_cache_missing() -> PolicyError {
+    PolicyError::new(
+        "identity_cache_missing",
+        "0A000",
+        "identity column is not supported without an explicit cache size. please define CACHE \
+         greater than or equal to 65536 or equal to 1",
+    )
+}
+
+/// `0A000`: `CREATE SEQUENCE` without an explicit CACHE.
+pub fn sequence_cache_missing() -> PolicyError {
+    PolicyError::new(
+        "sequence_cache_missing",
+        "0A000",
+        "CREATE SEQUENCE is not supported without an explicit cache size. please define CACHE \
+         greater than or equal to 65536 or equal to 1",
+    )
+}
+
+/// `0A000`: a CACHE value between 2 and 65535 (or below 1).
+pub fn cache_value() -> PolicyError {
+    PolicyError::new("cache_value", "0A000", "CACHE must be 1 or at least 65536")
+}
+
+/// `0A000`: `ADD COLUMN` with a constraint or default.
+pub fn add_column_constraint() -> PolicyError {
+    PolicyError::new(
+        "add_column_constraint",
+        "0A000",
+        "ALTER TABLE ADD COLUMN with constraint not supported",
+    )
+}
+
+/// `0A000`: `ALTER COLUMN ... TYPE`.
+pub fn alter_column_type() -> PolicyError {
+    PolicyError::new(
+        "alter_column_type",
+        "0A000",
+        "unsupported ALTER TABLE ALTER COLUMN ... SET DATA TYPE statement",
+    )
+}
+
+/// `0A000`: `ALTER COLUMN ... SET NOT NULL`.
+pub fn set_not_null() -> PolicyError {
+    PolicyError::new(
+        "set_not_null",
+        "0A000",
+        "SET NOT NULL is not supported (only DROP NOT NULL)",
+    )
+}
+
+/// `0A000`: dropping a primary-key column (decided by the server from the catalog).
+pub fn drop_pk_column(column: &str) -> PolicyError {
+    PolicyError::new(
+        "drop_pk_column",
+        "0A000",
+        format!("cannot drop primary key column {column}"),
+    )
+}
+
+/// `0A000`: an `ADD CONSTRAINT` other than a `NOT VALID` foreign key or check.
+pub fn add_constraint() -> PolicyError {
+    PolicyError::new(
+        "add_constraint",
+        "0A000",
+        "unsupported ALTER TABLE ADD CONSTRAINT statement",
+    )
+}
+
+/// `0A000`: a `NOT VALID` form micro-dsql cannot enforce (`form` names it).
+pub fn add_constraint_form(form: &str) -> PolicyError {
+    PolicyError::new(
+        "add_constraint_form",
+        "0A000",
+        format!("unsupported NOT VALID constraint form: {form}"),
+    )
+}
+
+/// `0A000`: `VALIDATE CONSTRAINT` without `ASYNC`.
+pub fn validate_sync() -> PolicyError {
+    PolicyError::new(
+        "validate_sync",
+        "0A000",
+        "unsupported ALTER TABLE VALIDATE CONSTRAINT statement",
+    )
+}
+
+/// `42809`: `sys.wait_for_job` called from a query.
+pub fn wait_for_job_select() -> PolicyError {
+    PolicyError::new(
+        "wait_for_job_select",
+        "42809",
+        "sys.wait_for_job(text) is a procedure",
+    )
+}
+
+/// `0A000`: a subquery in the argument of `CALL sys.wait_for_job`.
+pub fn wait_for_job_subquery() -> PolicyError {
+    PolicyError::new(
+        "wait_for_job_subquery",
+        "0A000",
+        "cannot use subquery in CALL argument",
+    )
+}
+
+/// `22P02`: a job id that is not a job id.
+pub fn wait_for_job_id() -> PolicyError {
+    PolicyError::new("wait_for_job_id", "22P02", "Unable to convert text to UUID")
+}
+
+/// `22023`: a well-formed job id that `sys.jobs` does not have.
+pub fn wait_for_job_unknown(id: &str) -> PolicyError {
+    PolicyError::new(
+        "wait_for_job_unknown",
+        "22023",
+        format!("job {id} not found"),
+    )
+}
+
+/// `42501`: DML on a `sys` relation.
+pub fn sys_write(relation: &str) -> PolicyError {
+    PolicyError::new(
+        "sys_write",
+        "42501",
+        format!("permission denied for table {relation}"),
+    )
+}
+
+/// `42501`: DDL on the `sys` schema.
+pub fn sys_ddl() -> PolicyError {
+    PolicyError::new("sys_ddl", "42501", "permission denied for schema sys")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

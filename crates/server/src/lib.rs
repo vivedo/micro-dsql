@@ -45,13 +45,22 @@
 //   crate); engine conflicts and lock contention are sent as DSQL's 40001 OC000/OC001 errors
 //   (`55P03` is mapped to OC000 until autocommit runs as a transaction); errors raised by the
 //   policy carry their own SQLSTATE, message and DETAIL;
+// - M3 (DDL for ORMs): DSQL's `ASYNC` keyword is blanked before the syntax check and the
+//   parameter analysis, job statements (`CREATE INDEX ASYNC`, `CALL sys.wait_for_job`, ...)
+//   are answered through `sys.jobs` by `sys.rs`, DDL with prelude statements, cleanup or
+//   constraint work runs through `ddl.rs`; `Outcome::TaggedRows` and `reply_rows` carry the
+//   typed rows of those answers; `open_database` creates `sys.jobs`;
 // - the upstream unit tests (which need Turso's internal test client) are not carried
 //   over; crates/server/tests/smoke covers the behaviour.
 
 mod binary;
 mod conn;
+mod constraints;
+mod ddl;
 mod dsql;
+mod internal;
 mod startup;
+mod sys;
 
 use std::fmt::Debug;
 use std::net::SocketAddr;
@@ -72,8 +81,8 @@ use turso_pg_parser::ParseResult;
 
 use micro_dsql_policy::params::Column;
 use micro_dsql_policy::{
-    ParamHint, PolicyError, PolicyLimits, ResultHint, SessionPolicy, SettingCommand, StatementPlan,
-    TxnStatus,
+    ColumnType, JobAction, ParamHint, PolicyError, PolicyLimits, ReplyColumn, ResultHint,
+    SessionPolicy, SettingCommand, StatementPlan, TxnStatus,
 };
 
 use pgwire::api::portal::{Format, Portal};
@@ -160,6 +169,7 @@ pub fn open_database(storage: &Storage) -> anyhow::Result<Arc<Database>> {
             turso_pg::open_database(path, None, OpenFlags::default(), opts)?.1
         }
     };
+    sys::bootstrap(&db)?;
     Ok(db)
 }
 
@@ -304,7 +314,7 @@ pub struct PgStatement {
 
 impl PgStatement {
     fn analyze(conn: &PgConnection, sql: String, declared: &[Option<Type>]) -> Self {
-        let shape = micro_dsql_policy::analyze(&sql);
+        let shape = micro_dsql_policy::analyze(&micro_dsql_policy::rewrite::pre_parse(&sql).text);
         let count = shape.params.len().max(declared.len());
         let param_types = (0..count)
             .map(|i| match declared.get(i) {
@@ -381,6 +391,12 @@ enum Outcome {
         rows: Vec<PgWireResult<DataRow>>,
     },
     Command(Tag),
+    /// Rows answered with a command tag of their own (`CREATE INDEX` plus a `job_id` row).
+    TaggedRows {
+        tag: String,
+        header: Arc<Vec<FieldInfo>>,
+        rows: Vec<PgWireResult<DataRow>>,
+    },
     Copy {
         column_count: i16,
         rows: Vec<Vec<u8>>,
@@ -394,6 +410,11 @@ impl Outcome {
         match self {
             Outcome::Rows { header, rows } => {
                 Response::Query(QueryResponse::new(header, stream::iter(rows)))
+            }
+            Outcome::TaggedRows { tag, header, rows } => {
+                let mut response = QueryResponse::new(header, stream::iter(rows));
+                response.set_command_tag(&tag);
+                Response::Query(response)
             }
             Outcome::Command(tag) => Response::Execution(tag),
             Outcome::Copy { .. } => unreachable!("COPY is only run by the simple protocol"),
@@ -439,6 +460,40 @@ impl SimpleQueryHandler for TursoPgHandler {
 }
 
 impl TursoPgHandler {
+    /// `Execute` for a statement answered with rows under its own command tag: pgwire's
+    /// `_on_execute` with the one difference that the tag is sent as it is, without a row count
+    /// (a portal for such a statement is never suspended: it has one row).
+    async fn execute_with_own_tag<C>(&self, client: &mut C, message: Execute) -> PgWireResult<()>
+    where
+        C: ClientInfo + ClientPortalStore + Sink<PgWireBackendMessage> + Unpin + Send + Sync,
+        C::PortalStore: PortalStore<Statement = PgStatement>,
+        C::Error: Debug,
+        PgWireError: From<<C as Sink<PgWireBackendMessage>>::Error>,
+    {
+        if !matches!(client.state(), PgWireConnectionState::ReadyForQuery) {
+            return Err(PgWireError::NotReadyForQuery);
+        }
+        let transaction_status = client.transaction_status();
+        client.set_state(PgWireConnectionState::QueryInProgress);
+        let name = message.name.as_deref().unwrap_or(pgwire::api::DEFAULT_NAME);
+        let Some(portal) = client.portal_store().get_portal(name) else {
+            return Err(PgWireError::PortalNotFound(name.to_owned()));
+        };
+        match ExtendedQueryHandler::do_query(self, client, portal.as_ref(), 0).await? {
+            Response::Query(mut results) => {
+                send_rows_with_own_tag(client, &mut results, false).await?;
+            }
+            Response::Execution(tag) => send_execution_response(client, tag).await?,
+            _ => unreachable!("job statements answer with rows"),
+        }
+        if name == pgwire::api::DEFAULT_NAME {
+            client.portal_store().rm_portal(name);
+        }
+        client.set_state(PgWireConnectionState::ReadyForQuery);
+        client.set_transaction_status(transaction_status);
+        Ok(())
+    }
+
     async fn run_simple_query<C>(&self, client: &mut C, query: Query) -> PgWireResult<()>
     where
         C: ClientInfo + ClientPortalStore + Sink<PgWireBackendMessage> + Unpin + Send + Sync,
@@ -460,7 +515,10 @@ impl TursoPgHandler {
                 conn.abort_transaction_block_on_error();
                 pg_error(turso_core::LimboError::ParseError(error.to_string()).into())
             };
-            turso_pg_parser::parse(&text).map_err(parse_error)?;
+            // DSQL's `ASYNC` keyword is blanked for the syntax check; the statements are
+            // split from the client's text and planned (blanked again) one by one.
+            let checked = micro_dsql_policy::rewrite::pre_parse(&text);
+            turso_pg_parser::parse(&checked.text).map_err(parse_error)?;
             let statements = turso_pg_parser::split_statements(&text).map_err(parse_error)?;
             plan_statements(&conn, &policy, &statements)
         })
@@ -483,6 +541,9 @@ impl TursoPgHandler {
                     error,
                 } => send_copy_out(client, column_count, rows, error).await?,
                 outcome => match outcome.into_response() {
+                    Response::Query(mut result) if result.command_tag() != "SELECT" => {
+                        send_rows_with_own_tag(client, &mut result, true).await?
+                    }
                     Response::Query(mut result) => {
                         send_query_response(client, &mut result, true).await?
                     }
@@ -544,6 +605,42 @@ fn run_simple_statement(
     })
 }
 
+/// Sends a result set and completes it with the result's command tag as it is, where pgwire's
+/// `send_query_response` appends the number of rows (`SELECT` -> `SELECT 1`).
+async fn send_rows_with_own_tag<C>(
+    client: &mut C,
+    results: &mut QueryResponse,
+    send_describe: bool,
+) -> PgWireResult<()>
+where
+    C: Sink<PgWireBackendMessage> + Unpin,
+    C::Error: Debug,
+    PgWireError: From<<C as Sink<PgWireBackendMessage>>::Error>,
+{
+    use futures::StreamExt;
+    let tag = results.command_tag().to_owned();
+    let schema = results.row_schema();
+    let rows = results.data_rows();
+    if send_describe {
+        client
+            .send(PgWireBackendMessage::RowDescription(
+                pgwire::messages::data::RowDescription::new(
+                    schema.iter().map(Into::into).collect(),
+                ),
+            ))
+            .await?;
+    }
+    while let Some(row) = rows.next().await {
+        client.feed(PgWireBackendMessage::DataRow(row?)).await?;
+    }
+    client
+        .send(PgWireBackendMessage::CommandComplete(
+            pgwire::messages::response::CommandComplete::new(tag),
+        ))
+        .await?;
+    Ok(())
+}
+
 fn show_fields(column: &str, format: &Format) -> Vec<FieldInfo> {
     vec![FieldInfo::new(
         column.to_owned(),
@@ -552,6 +649,51 @@ fn show_fields(column: &str, format: &Format) -> Vec<FieldInfo> {
         Type::TEXT,
         format.format_for(0),
     )]
+}
+
+/// The result fields of a statement the policy or the server answers itself.
+fn reply_fields(columns: &[ReplyColumn], format: &Format) -> Vec<FieldInfo> {
+    columns
+        .iter()
+        .enumerate()
+        .map(|(i, column)| {
+            let ty = match column.ty {
+                ColumnType::Text => Type::TEXT,
+                ColumnType::Bool => Type::BOOL,
+                ColumnType::Int4 => Type::INT4,
+            };
+            FieldInfo::new(column.name.clone(), None, None, ty, format.format_for(i))
+        })
+        .collect()
+}
+
+/// A result set built from text values (`t`/`f` for booleans).
+fn reply_rows(
+    tag: &str,
+    columns: &[ReplyColumn],
+    rows: &[Vec<Option<String>>],
+    format: &Format,
+) -> PgWireResult<Outcome> {
+    let header = Arc::new(reply_fields(columns, format));
+    let mut encoded = Vec::with_capacity(rows.len());
+    for row in rows {
+        let mut encoder = DataRowEncoder::new(header.clone());
+        for (column, value) in columns.iter().zip(row) {
+            match column.ty {
+                ColumnType::Text => encoder.encode_field(&value.as_deref())?,
+                ColumnType::Bool => encoder.encode_field(&value.as_deref().map(|v| v == "t"))?,
+                ColumnType::Int4 => {
+                    encoder.encode_field(&value.as_deref().and_then(|v| v.parse::<i32>().ok()))?
+                }
+            }
+        }
+        encoded.push(encoder.finish());
+    }
+    Ok(Outcome::TaggedRows {
+        tag: tag.to_owned(),
+        header,
+        rows: encoded,
+    })
 }
 
 /// Runs `COPY ... TO STDOUT` (blocking), collecting the encoded rows.
@@ -630,11 +772,22 @@ impl ExtendedQueryHandler for TursoPgHandler {
         C::Error: Debug,
         PgWireError: From<<C as Sink<PgWireBackendMessage>>::Error>,
     {
-        let sql = client
+        let plan = client
             .portal_store()
             .get_portal(message.name.as_deref().unwrap_or(pgwire::api::DEFAULT_NAME))
-            .map(|portal| portal.statement.statement.plan.original.clone());
-        let result = self._on_execute(client, message).await;
+            .map(|portal| portal.statement.statement.plan.clone());
+        let sql = plan.as_ref().map(|plan| plan.original.clone());
+        // pgwire appends the row count to every result's command tag; the job statements need
+        // `CREATE INDEX`, `ALTER TABLE` and `CALL` without it (M3).
+        let own_tag = plan
+            .as_ref()
+            .and_then(|plan| plan.job.as_ref())
+            .is_some_and(JobAction::has_own_command_tag);
+        let result = if own_tag {
+            self.execute_with_own_tag(client, message).await
+        } else {
+            self._on_execute(client, message).await
+        };
         let status = wire_transaction_status(&self.conn);
         finish_query(client, result, true, status, sql.as_deref()).await
     }
@@ -757,13 +910,16 @@ fn describe(
         if plan.refusal.is_some() {
             return Ok(vec![]);
         }
-        if let Some(column) = plan.show_column() {
-            return Ok(show_fields(column, format));
+        if let Some(columns) = plan.reply_columns() {
+            return Ok(reply_fields(&columns, format));
         }
-        let answered_here = match &plan.setting {
-            Some(SettingCommand::ResetAll) | None => plan.intercept.is_some(),
-            Some(_) => true,
-        };
+        // DDL the server runs itself returns no rows, and the engine may not even prepare the
+        // text it carries (`ADD CONSTRAINT ... NOT VALID`, a refused `DROP COLUMN`).
+        let answered_here = plan.ddl.is_some()
+            || match &plan.setting {
+                Some(SettingCommand::ResetAll) | None => plan.intercept.is_some(),
+                Some(_) => true,
+            };
         if answered_here {
             return Ok(vec![]);
         }

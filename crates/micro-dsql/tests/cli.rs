@@ -223,3 +223,45 @@ fn an_unusable_data_path_is_an_error() {
     assert!(!output.status.success());
     assert!(!output.stderr.is_empty());
 }
+
+fn remove_db_files(path: &std::path::Path) {
+    // The engine keeps side files next to the database (e.g. a log); remove them all.
+    if let (Some(dir), Some(name)) = (path.parent(), path.file_name()) {
+        let name = name.to_string_lossy().into_owned();
+        for entry in std::fs::read_dir(dir).unwrap().flatten() {
+            if entry.file_name().to_string_lossy().starts_with(&name) {
+                let _ = std::fs::remove_file(entry.path());
+            }
+        }
+    }
+}
+
+#[tokio::test]
+async fn sys_jobs_is_present_after_reopening_a_data_file() {
+    let path: PathBuf = std::env::temp_dir().join(format!(
+        "micro-dsql-cli-sys-{}-{}.db",
+        std::process::id(),
+        Instant::now().elapsed().as_nanos()
+    ));
+    let path_str = path.to_str().unwrap().to_owned();
+    for round in 0..2 {
+        let running = start(&["--listen", "127.0.0.1:0", "--data", &path_str]);
+        let c = client(running.addr).await;
+        let rows = c
+            .simple_query("SELECT * FROM sys.jobs")
+            .await
+            .unwrap_or_else(|e| panic!("round {round}: {e:?}"));
+        assert_eq!(
+            rows.iter()
+                .filter(|m| matches!(m, tokio_postgres::SimpleQueryMessage::Row(_)))
+                .count(),
+            0,
+            "round {round}"
+        );
+        drop(c);
+        signal(&running.child, "TERM");
+        let (status, log) = wait_exit(running);
+        assert!(status.success(), "{log:?}");
+    }
+    remove_db_files(&path);
+}

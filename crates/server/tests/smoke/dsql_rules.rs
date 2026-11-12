@@ -114,7 +114,7 @@ async fn ddl_and_dml_in_one_transaction_in_both_orders() {
             proto,
             &c,
             &["INSERT INTO mix VALUES (1)"],
-            &format!("CREATE INDEX {t}_i ON mix (id)"),
+            &format!("CREATE INDEX ASYNC {t}_i ON mix (id)"),
             e("0A000", DDL_DML),
         )
         .await;
@@ -362,7 +362,7 @@ async fn a_multi_statement_string_is_one_implicit_transaction() {
     assert_eq!(
         simple_err(
             &c,
-            "INSERT INTO multi VALUES (1); CREATE INDEX multi_i ON multi (id)"
+            "INSERT INTO multi VALUES (1); CREATE INDEX ASYNC multi_i ON multi (id)"
         )
         .await,
         e("0A000", DDL_DML)
@@ -379,7 +379,7 @@ async fn a_multi_statement_string_is_one_implicit_transaction() {
         Some("0")
     );
     // Allowed strings.
-    c.simple_query("BEGIN; CREATE INDEX multi_ok ON multi (id); COMMIT")
+    c.simple_query("BEGIN; CREATE INDEX ASYNC multi_ok ON multi (id); COMMIT")
         .await
         .unwrap();
     c.simple_query("SELECT 1; SELECT 2").await.unwrap();
@@ -785,14 +785,14 @@ async fn supported_statements_are_not_refused() {
         let n = format!("{proto:?}").to_lowercase();
         for sql in [
             format!("CREATE DOMAIN dom_{n} AS int"),
-            format!("CREATE INDEX idx_{n} ON rules_t (v)"),
-            format!("CREATE UNIQUE INDEX uidx_{n} ON rules_t (id, v)"),
+            format!("CREATE INDEX ASYNC idx_{n} ON rules_t (v)"),
+            format!("CREATE UNIQUE INDEX ASYNC uidx_{n} ON rules_t (id, v)"),
             "SELECT ARRAY[1, 2]".to_owned(),
             "SELECT '10.0.0.1'::inet".to_owned(),
             format!("CREATE TABLE sup_{n} (id int PRIMARY KEY, n numeric(10,2), j jsonb, u uuid, tz timetz, i interval, b bytea, t timestamptz, txt text)"),
             format!("ALTER TABLE sup_{n} ADD COLUMN extra int"),
             format!("CREATE VIEW view_{n} AS SELECT 1 AS a"),
-            format!("CREATE SEQUENCE seq_{n}"),
+            format!("CREATE SEQUENCE seq_{n} CACHE 1"),
         ] {
             if let Err(err) = proto.run(&c, &sql).await {
                 // The engine may have its own opinion; a rule of ours must not.
