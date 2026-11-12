@@ -85,7 +85,7 @@ crates/server/tests/smoke/               # tokio-postgres integration tests (ser
 .github/workflows/ci.yml
 ```
 
-**Structure Decision**: docs/plan.md §3 layout. Integration tests live in `crates/server/tests/smoke/` (PLAN.md path)
+**Structure Decision**: docs/plan.md §3 layout. Integration tests live in `crates/server/tests/smoke/` (docs/plan.md path)
 and are compiled as a test target of the `micro-dsql-server` crate via `[[test]] path`, so they can
 start the server in-process. `crates/sys` is skipped (M3).
 

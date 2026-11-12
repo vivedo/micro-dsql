@@ -1,7 +1,7 @@
 # 06 — M0 spike findings: running Turso's Postgres frontend
 
 Run on 2026-11-12. This is the first time the research in 01–05 was checked by **running** the code
-rather than reading it (PLAN.md §4 M0). Everything below is reproducible with the scripts in
+rather than reading it (docs/plan.md §4 M0). Everything below is reproducible with the scripts in
 [`research/spike/`](spike/README.md); the raw output of the recorded run is in `research/spike/results/`.
 
 ## Summary

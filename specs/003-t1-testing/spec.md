@@ -227,7 +227,7 @@ Decisions taken without a human in the loop (decision; alternatives; reason):
 - **Probes are separate files under `tests/psql/probes/`, one rule family per file**, with their
   own expected outputs and objects named with a probe-specific prefix; reason: a mismatch maps to one
   backlog item.
-- **MiniStack's own test suite is mined, not run** (PLAN.md).
+- **MiniStack's own test suite is mined, not run** (docs/plan.md).
 - **`00_connect` checks that `current_user` is present, not that it equals `admin`**: MiniStack maps
   every login to its backend superuser `postgres`; the exact role (and `is_superuser`) is compared
   in probe `12_session_identity` instead; alternatives: assert `admin` (never green on the
@@ -263,7 +263,7 @@ Reconcile (after M1) decisions:
   against micro-dsql on macOS and Linux as a blocking step, and uses micro-dsql as target A in the
   allowed-to-fail differential job); alternatives: a separate layer-1 job; reason: no gap found.
 - **README quick start kept as M1 wrote it** (three lines: start, connect with psql, done).
-- **Probe mismatches are recorded, not fixed** (PLAN.md T1: "fidelity gaps found here are
+- **Probe mismatches are recorded, not fixed** (docs/plan.md T1: "fidelity gaps found here are
   recorded, not fixed"); the `DEALLOCATE` fix is the exception because it broke a mainstream
   driver outright.
 
@@ -341,7 +341,7 @@ deliberate duplicate-key steps (`23505`).
 
 JDBC was not re-tested (no smoke script in `research/spike/`).
 
-## T1 exit checklist (PLAN.md §4 T1)
+## T1 exit checklist (docs/plan.md §4 T1)
 
 - [x] Layer 1 is green against micro-dsql locally (5/5, psql 16 and 18 clients, two consecutive
   runs). **In CI: not verified** — `.github/workflows/ci.yml` runs it as a blocking step on

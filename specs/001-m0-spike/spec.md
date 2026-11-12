@@ -6,7 +6,7 @@
 
 **Status**: Draft
 
-**Input**: User description: "M0 spike for micro-dsql (PLAN.md §4 M0). Validate by running, not by reading code, whether Turso's Postgres frontend holds up as the engine for a DSQL emulator: build it, serve SELECT 1 over psql, run a representative app schema and ~15 queries, smoke-test five drivers, run four two-session OCC experiments, and write research/06-spike-findings.md with a go/no-go verdict."
+**Input**: User description: "M0 spike for micro-dsql (docs/plan.md §4 M0). Validate by running, not by reading code, whether Turso's Postgres frontend holds up as the engine for a DSQL emulator: build it, serve SELECT 1 over psql, run a representative app schema and ~15 queries, smoke-test five drivers, run four two-session OCC experiments, and write research/06-spike-findings.md with a go/no-go verdict."
 
 ## User Scenarios & Testing *(mandatory)*
 
@@ -170,8 +170,8 @@ a CONFIRMED / REFUTED / NOT TESTED line with evidence.
 - No target application exists; a representative app-style schema and ~15 queries stand in for "your app's
   SQL" (decision; alternative: pick an open-source app's migrations; reason: faster and covers the listed
   feature mix deliberately).
-- The upstream `tursopg` binary is used as the server for the spike (PLAN.md M0); our own binary is M1.
-- Build toolchain: Rust stable is used if the pinned 1.88 toolchain cannot be installed (PLAN.md §2 says
+- The upstream `tursopg` binary is used as the server for the spike (docs/plan.md M0); our own binary is M1.
+- Build toolchain: Rust stable is used if the pinned 1.88 toolchain cannot be installed (docs/plan.md §2 says
   "build with stable first"); recorded as a finding.
 - Driver set is psql, psycopg 3, asyncpg, node-pg and pgx (decision; JDBC and sqlx are left out because no
   JDK is assumed and sqlx is close to tokio-postgres covered in M1).

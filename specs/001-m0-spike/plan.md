@@ -87,7 +87,7 @@ research/spike/
 research/06-spike-findings.md
 ```
 
-**Structure Decision**: a flat `research/spike/` directory, separate from the future `tests/` tree (PLAN.md §3),
+**Structure Decision**: a flat `research/spike/` directory, separate from the future `tests/` tree (docs/plan.md §3),
 because these scripts target upstream `tursopg` and are evidence for M0, not the M1/T1 suites.
 
 ## Complexity Tracking

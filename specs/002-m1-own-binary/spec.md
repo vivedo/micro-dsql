@@ -6,7 +6,7 @@
 
 **Status**: Implemented (round 1)
 
-**Input**: User description: "M1 'own binary that starts and runs' (PLAN.md §4 M1 items 1–6): own
+**Input**: User description: "M1 'own binary that starts and runs' (docs/plan.md §4 M1 items 1–6): own
 workspace and binary built on the pinned Turso Postgres frontend with a vendored wire server; CLI
 `micro-dsql [--listen 127.0.0.1:5432] [--data <file> | --memory (default)] [--log info]`; graceful
 shutdown; ready in under 1 s; statements off the async runtime; any user/password; SSL refused;
@@ -216,4 +216,4 @@ plus the T1 psql scenarios run in CI on macOS and Linux.
   (a dedicated thread per connection was judged more code for the same effect).
 - Upstream unit tests of the vendored file depend on Turso's internal test client and are not
   carried over; equivalent behaviour is covered by our own integration tests.
-- Rust stable is used; no toolchain pin unless stable fails (PLAN.md §2).
+- Rust stable is used; no toolchain pin unless stable fails (docs/plan.md §2).

@@ -1,4 +1,4 @@
-"""Two-session OCC experiments for the M0 spike (PLAN.md M0.5).
+"""Two-session OCC experiments for the M0 spike (docs/plan.md M0.5).
 
 Every statement runs in a worker thread with a client-side timeout, so a server-side wait or hang is
 recorded as TIMEOUT instead of blocking the run (the server does not support CancelRequest).

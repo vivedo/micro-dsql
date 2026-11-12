@@ -1,6 +1,6 @@
 # M0 spike scripts
 
-Evidence for `research/06-spike-findings.md` (PLAN.md milestone M0). They target the upstream `tursopg`
+Evidence for `research/06-spike-findings.md` (docs/plan.md milestone M0). They target the upstream `tursopg`
 binary, not micro-dsql. Every script reads the standard libpq variables (`PGHOST`, `PGPORT`, `PGUSER`,
 `PGDATABASE`, `PGPASSWORD`, `PGSSLMODE`); `env.sh` fills in defaults (`127.0.0.1:5432`, `admin`,
 `postgres`, an arbitrary password, `sslmode=disable`).

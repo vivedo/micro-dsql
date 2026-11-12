@@ -34,7 +34,7 @@ Each entry: decision, rationale, alternatives considered.
 ## R4. Output determinism
 - `psql -X -q -f <relative file>` run from `tests/psql`, so error prefixes read
   `psql:30_errors.sql:<line>:`.
-- `\set VERBOSITY verbose` only in `30_errors.sql` (PLAN.md); `20_txn` and `40_conflict` use
+- `\set VERBOSITY verbose` only in `30_errors.sql` (docs/plan.md); `20_txn` and `40_conflict` use
   `\set VERBOSITY sqlstate` so only codes are compared.
 - Runner normalisation (documented in `run.sh` and contracts/run-sh.md): delete lines starting with
   `LOCATION:` and NOTICE lines ending in `does not exist, skipping`.
