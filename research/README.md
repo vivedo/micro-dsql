@@ -9,6 +9,8 @@ Research for a standalone **Aurora DSQL emulator built on Turso's Rust Postgres 
 | [03-landscape.md](03-landscape.md) | Existing DSQL emulators (MiniStack, Floci, Dreamescaper, LocalStack, moto…), what the official connectors and ORMs require, and alternative bases |
 | [04-gap-analysis.md](04-gap-analysis.md) | Requirement-by-requirement gaps, with effort and where each fix lives (our layer, fork, or upstream) |
 | [05-architecture-and-plan.md](05-architecture-and-plan.md) | Proposed architecture, phased PoC, go/no-go criteria, open decisions |
+| [06-spike-findings.md](06-spike-findings.md) | M0 spike results: Turso build, driver matrix, OCC experiments, verdicts on the inferred [I] items, go/no-go |
+| [`spike/`](spike/README.md) | The M0 spike scripts (app SQL, driver smoke tests, OCC experiments) and their recorded output |
 | `sources/` | DSQL User Guide text (Nov 2026), API reference pages, and the botocore `dsql` model and token signer, for offline grep |
 
 All Turso code references are to `tursodatabase/turso` at commit `d5fdf4d` (2026-11-11).

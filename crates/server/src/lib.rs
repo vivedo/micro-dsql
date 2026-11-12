@@ -24,7 +24,7 @@
 // IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
 // CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 //
-// The full upstream licence text is in LICENSES/turso-MIT.txt.
+// The full upstream licence text is in crates/server/LICENSE-turso.
 //
 // Changes from upstream (micro-dsql M1):
 // - our own accept loop and per-connection loop (`conn.rs`): Terminate closes the
@@ -41,7 +41,7 @@
 //   for common types (B3, `binary.rs`);
 // - parameter decoding errors use PostgreSQL SQLSTATEs (22P02/22P03) instead of XX000;
 // - the upstream unit tests (which need Turso's internal test client) are not carried
-//   over; tests/smoke covers the behaviour.
+//   over; crates/server/tests/smoke covers the behaviour.
 
 mod binary;
 mod conn;

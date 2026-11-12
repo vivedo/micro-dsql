@@ -10,7 +10,7 @@ The spike has no persistent data. Its "entities" are result records printed by t
 - **ClaimVerdict**: `source` (02/04 + section), `claim`, `verdict` (CONFIRMED / REFUTED / NOT TESTED),
   `evidence`.
 
-App schema used by `spike/app/schema.sql`: `customers(id uuid PK, email text unique, name text, vip bool,
+App schema used by `research/spike/app/schema.sql`: `customers(id uuid PK, email text unique, name text, vip bool,
 created_at timestamptz)`, `products(id bigint PK, sku text unique, price numeric(12,2), stock int, attrs
 jsonb)`, `orders(id bigint PK, customer_id uuid FK, status text, total numeric(12,2), placed_at
 timestamptz)`, `order_items(order_id FK, product_id FK, qty int, unit_price numeric(12,2), PK(order_id,

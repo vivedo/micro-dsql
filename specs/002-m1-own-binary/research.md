@@ -7,7 +7,7 @@ Each entry: decision, rationale, alternatives considered.
   dependencies on `https://github.com/tursodatabase/turso`, `rev = "d5fdf4d876ad7eb68e9cbef9a88e6b65c56b19f5"`;
   `pgwire = "0.36"`, `pg_query = "6.1"` (same as upstream `postgres/server/Cargo.toml` and workspace).
 - **Rationale**: constitution II; these are exactly what `turso_pg_server` uses at that rev.
-- **Alternatives**: depend on `turso_pg_server` directly (rejected by PLAN.md: handler is private and
+- **Alternatives**: depend on `turso_pg_server` directly (rejected by docs/plan.md: handler is private and
   needs changes); crates.io releases (not at the pinned rev).
 
 ## R2. Database options
@@ -69,7 +69,7 @@ Each entry: decision, rationale, alternatives considered.
   by a test for `23503`.
 
 ## R11. Integration tests
-- **Decision**: `tests/smoke/` compiled as a `[[test]]` of the server crate; each test starts the
+- **Decision**: `crates/server/tests/smoke/` compiled as a `[[test]]` of the server crate; each test starts the
   server on `127.0.0.1:0` inside the test process and connects with `tokio-postgres` (`NoTls`).
   T1 layer-1 statements replayed via `simple_query`.
 

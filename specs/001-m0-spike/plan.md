@@ -7,9 +7,9 @@
 ## Summary
 
 Build the upstream `tursopg` binary from a local Turso clone (read and build only), run it as a pgwire
-server, and measure it with small, reproducible scripts under `spike/`: an app-style SQL script, one smoke
+server, and measure it with small, reproducible scripts under `research/spike/`: an app-style SQL script, one smoke
 script per driver, and two-session OCC scenarios. Results go into `research/06-spike-findings.md` with a
-verdict on every `[I]` claim of research/02 and research/04 and a go/no-go verdict against PLAN.md M0.
+verdict on every `[I]` claim of research/02 and research/04 and a go/no-go verdict against docs/plan.md M0.
 
 ## Technical Context
 
@@ -20,8 +20,8 @@ engine under test is Rust (Turso, built with the toolchain available locally).
 
 **Storage**: Turso `:memory:` database inside `tursopg --server` (default).
 
-**Testing**: each script prints one line per step (`OK` / `ERR <sqlstate> <message>`); `spike/run-all.sh`
-runs everything and tees output to `spike/results/`.
+**Testing**: each script prints one line per step (`OK` / `ERR <sqlstate> <message>`); `research/spike/run-all.sh`
+runs everything and tees output to `research/spike/results/`.
 
 **Target Platform**: macOS arm64 developer machine (scripts are portable to Linux).
 
@@ -45,7 +45,7 @@ timeouts so a hang is recorded instead of blocking the run.
 | III. Backend-agnostic policy | N/A. No policy code in this feature. |
 | IV. Gates | `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings`, `cargo test --workspace`: **N/A, no Rust crate exists yet** in this repo. `tests/psql/run.sh` starts at T1. Feature gate instead: every spike script runs to completion against `tursopg` and its output is recorded. |
 | V. Merge / known gaps | Failures found are the deliverable (recorded in research/06), not test gates. Merge is done by the orchestrator. |
-| Repo constraints | `research/` read-only except the new `06-spike-findings.md`, which PLAN.md M0.6 mandates. No machine paths, no tool attribution. |
+| Repo constraints | `research/` read-only except the new `06-spike-findings.md`, which docs/plan.md M0.6 mandates. No machine paths, no tool attribution. |
 
 Post-design re-check: PASS (no new violations).
 
@@ -66,10 +66,10 @@ specs/001-m0-spike/
 ### Source Code (repository root)
 
 ```text
-spike/
+research/spike/
 ├── README.md               # how to run (env vars, prerequisites)
 ├── env.sh                  # default PG* values (overridable)
-├── run-all.sh              # runs everything, writes spike/results/*.txt
+├── run-all.sh              # runs everything, writes research/spike/results/*.txt
 ├── app/
 │   ├── schema.sql          # app-style schema + seed
 │   ├── queries.sql         # ~15 representative queries
@@ -87,7 +87,7 @@ spike/
 research/06-spike-findings.md
 ```
 
-**Structure Decision**: a flat `spike/` directory, separate from the future `tests/` tree (PLAN.md §3),
+**Structure Decision**: a flat `research/spike/` directory, separate from the future `tests/` tree (PLAN.md §3),
 because these scripts target upstream `tursopg` and are evidence for M0, not the M1/T1 suites.
 
 ## Complexity Tracking

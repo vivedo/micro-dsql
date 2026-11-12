@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["crates/policy", "crates/server", "bin/micro-dsql"]
+members = ["crates/policy", "crates/server", "crates/micro-dsql"]
 
 [workspace.package]
 version = "0.1.0"

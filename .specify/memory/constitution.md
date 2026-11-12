@@ -14,7 +14,7 @@ local tests and CI. Within the PoC:
   validating them.
 - There MUST be no control plane (`CreateCluster`, `GetCluster`, ...). Tests that need one run a
   separate emulator alongside micro-dsql.
-- Work outside this scope (the PLAN.md non-goals and "Later" list) MUST NOT be started until this
+- Work outside this scope (the docs/plan.md non-goals and "Later" list) MUST NOT be started until this
   constitution is amended to admit it.
 
 Rationale: the PoC succeeds by proving database behaviour (SQL surface, DSQL rules, OCC) quickly.
@@ -73,8 +73,8 @@ Gates that run identically for every change keep regressions out of `main`.
   - every failing test stays in the suite;
   - each failing Rust test is skipped with `#[ignore = "KNOWN-GAP: <reason>"]`;
   - each failing psql scenario is listed in the skip list `tests/psql/known-gaps.txt` with a reason;
-  - every skipped test is recorded in `KNOWN_GAPS.md` with the observed error and a suspected cause.
-- A known gap is closed by removing its skip marker and its `KNOWN_GAPS.md` entry in the same change
+  - every skipped test is recorded in `docs/known-gaps.md` with the observed error and a suspected cause.
+- A known gap is closed by removing its skip marker and its `docs/known-gaps.md` entry in the same change
   that makes the test pass.
 
 Rationale: the PoC's goal is to measure how close Turso gets to DSQL. Recording gaps visibly keeps
@@ -88,7 +88,7 @@ progress moving without hiding failures or losing the tests that define the targ
   absolute home-directory or mount paths). Use repository-relative paths and environment variables.
 - Commits, code, comments and documentation MUST NOT name or credit the tools or assistants used to
   author them, and commits MUST NOT carry `Co-Authored-By` or similar attribution trailers.
-- PLAN.md is the source of truth for scope; where PLAN.md and `research/` disagree, PLAN.md wins on
+- docs/plan.md is the source of truth for scope; where docs/plan.md and `research/` disagree, docs/plan.md wins on
   scope and `research/` wins on facts.
 
 ## Development Workflow

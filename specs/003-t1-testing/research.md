@@ -4,12 +4,12 @@ Each entry: decision, rationale, alternatives considered.
 
 ## R1. Reference target
 - **Decision**: MiniStack (`ministackorg/ministack`, `DSQL_STRICT=1`, Docker socket mounted).
-- **Rationale**: PLAN.md T1 names it; it fronts a real `postgres:16-alpine` with a DSQL rule proxy
+- **Rationale**: docs/plan.md T1 names it; it fronts a real `postgres:16-alpine` with a DSQL rule proxy
   whose messages were measured against live DSQL. The proxy runs inside the MiniStack container and
   listens on `25432+n`, so publishing `25432-25440` on the MiniStack container is sufficient (the
   backend Postgres containers are not published).
 - **Alternatives**: plain `postgres:16` (no DSQL rules; kept as the documented fallback),
-  Dreamescaper emulator (not the PLAN.md reference).
+  Dreamescaper emulator (not the docs/plan.md reference).
 
 ## R2. Measured reference facts (MiniStack, 2026-11-12)
 - `server_version` = `16.15`, `TimeZone` = `UTC`, `is_superuser` = `on`.

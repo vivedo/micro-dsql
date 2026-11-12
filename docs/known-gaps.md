@@ -8,7 +8,7 @@ close it. Blocker ids (B1–B14) refer to the M0 spike findings (research/06 §9
 all five T1 layer-1 scenarios pass against micro-dsql. The entries below are gaps without a
 failing test in the suite (probes and M0 findings), kept here so they are not forgotten.
 
-Fixed in M1 (with tests in `tests/smoke/`): B4 (Terminate closes the connection), B5 (foreign
+Fixed in M1 (with tests in `crates/server/tests/smoke/`): B4 (Terminate closes the connection), B5 (foreign
 keys enforced, `23503`, `ON DELETE CASCADE`), B9 except the items below, and most of B1–B3.
 
 | Id | Observed | Suspected cause | Milestone |

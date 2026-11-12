@@ -11,7 +11,7 @@ workspace and binary built on the pinned Turso Postgres frontend with a vendored
 `micro-dsql [--listen 127.0.0.1:5432] [--data <file> | --memory (default)] [--log info]`; graceful
 shutdown; ready in under 1 s; statements off the async runtime; any user/password; SSL refused;
 DSQL-like startup parameters, `SHOW server_version`/`SHOW timezone`, `current_database()` =
-`postgres`, close on Terminate (M0 blockers B9, B4); stretch B1, B2, B3, B5; KNOWN_GAPS.md;
+`postgres`, close on Terminate (M0 blockers B9, B4); stretch B1, B2, B3, B5; docs/known-gaps.md;
 integration tests with a Rust Postgres driver; CI on macOS and Linux; README quick start."
 
 ## User Scenarios & Testing *(mandatory)*
@@ -174,7 +174,7 @@ plus the T1 psql scenarios run in CI on macOS and Linux.
   binary-format parameters MUST be decoded for common types (B2); result type OIDs MUST be correct
   for `count(*)`, `smallint`, `numeric` columns and binary results MUST be encoded correctly for
   uuid/timestamptz/numeric (B3); foreign keys MUST be enforced (B5).
-- **FR-013**: The M0 blockers not fixed here MUST be recorded in `KNOWN_GAPS.md` with error,
+- **FR-013**: The M0 blockers not fixed here MUST be recorded in `docs/known-gaps.md` with error,
   suspected cause and target milestone.
 - **FR-014**: Integration tests MUST start the server on port 0 in-process and connect with a Rust
   Postgres driver: CRUD, explicit transaction, SHOW checks, SQLSTATE checks, and the T1 layer-1
@@ -198,7 +198,7 @@ plus the T1 psql scenarios run in CI on macOS and Linux.
 - **SC-003**: All non-known-gap integration tests pass on macOS and Linux; fmt and clippy are clean.
 - **SC-004**: The T1 layer-1 scenarios `00_connect`, `10_crud`, `20_txn`, `30_errors`, `40_conflict`
   are run against the binary and each result is reported (pass or recorded gap).
-- **SC-005**: Every M0 blocker B1–B14 is either fixed (with a test) or listed in `KNOWN_GAPS.md`.
+- **SC-005**: Every M0 blocker B1–B14 is either fixed (with a test) or listed in `docs/known-gaps.md`.
 
 ## Assumptions
 

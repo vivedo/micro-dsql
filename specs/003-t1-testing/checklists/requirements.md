@@ -32,6 +32,6 @@
 ## Notes
 
 - The feature is itself a test harness, so tool names (psql, POSIX shell, Docker, libpq variables)
-  are part of the requirement set fixed by PLAN.md T1, not implementation leakage.
+  are part of the requirement set fixed by docs/plan.md T1, not implementation leakage.
 - Reconcile-after-M1 requirements (FR-012 to FR-014, SC-006) are in scope of the spec but are
   delivered in a later phase.

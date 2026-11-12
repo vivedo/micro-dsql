@@ -6,7 +6,7 @@
 
 ## Summary
 
-Build the target-agnostic T1 harness from PLAN.md §4: five plain-psql scenarios with expected
+Build the target-agnostic T1 harness from docs/plan.md §4: five plain-psql scenarios with expected
 outputs and a POSIX-sh runner (blocking gate), a set of report-only DSQL-rule probes with outputs
 captured from the MiniStack DSQL emulator, scripts to bring MiniStack up/down and to diff two targets
 into `reports/diff-<date>.md`, and an optional CI workflow. All expected outputs are recorded against
@@ -47,9 +47,9 @@ not used; no machine-specific paths in committed files; no Rust/Cargo changes (M
 | II. Own repo, pinned upstream | N/A (no Rust/Turso changes). |
 | III. Backend-agnostic policy | N/A; the probes describe target behaviour only through SQL. |
 | IV. Gates: `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings`, `cargo test --workspace`, `tests/psql/run.sh` vs micro-dsql | Gates 1–3: unaffected by this feature (no Rust code); run once M1 lands. Gate 4: this feature *creates* `tests/psql/run.sh`; running it against micro-dsql is the Reconcile (after M1) phase. Tests are not weakened: expected outputs come from the reference, not from micro-dsql. |
-| V. Known-gap policy | `tests/psql/known-gaps.txt` is created (empty) and honoured by `run.sh`; `KNOWN_GAPS.md` is created only if a gap is recorded during Reconcile. |
+| V. Known-gap policy | `tests/psql/known-gaps.txt` is created (empty) and honoured by `run.sh`; `docs/known-gaps.md` is created only if a gap is recorded during Reconcile. |
 | Repo constraints (research/ read-only, no machine paths, no tool attribution) | PASS by design; checked before commit. |
-| Scope questions | None: T1 is in PLAN.md scope. Probes describe M2/M3 behaviour but implement nothing. |
+| Scope questions | None: T1 is in docs/plan.md scope. Probes describe M2/M3 behaviour but implement nothing. |
 
 **Post-design re-check**: PASS (design adds only scripts, SQL and docs; no new scope).
 
@@ -90,7 +90,7 @@ scripts/
 reports/            # gitignored
 ```
 
-**Structure Decision**: follow PLAN.md §3 exactly; probes are one rule family per file so a mismatch
+**Structure Decision**: follow docs/plan.md §3 exactly; probes are one rule family per file so a mismatch
 maps to one backlog item.
 
 ## Complexity Tracking

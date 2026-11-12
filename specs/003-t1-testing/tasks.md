@@ -46,7 +46,7 @@ from micro-dsql.
 
 **Independent Test**: `tests/psql/run.sh --probes` against MiniStack → all MATCH, exit 0.
 
-- [x] T014 [P] [US2] Write PLAN.md probes in tests/psql/probes/: 01_truncate.sql, 02_savepoint.sql, 03_temp_table.sql, 04_create_index_async.sql, 05_sys_jobs.sql, 06_ddl_dml_one_txn.sql, 07_two_ddl_one_txn.sql, 08_create_extension.sql, 09_serial_column.sql, 10_set_not_whitelisted.sql, 11_isolation_levels.sql
+- [x] T014 [P] [US2] Write docs/plan.md probes in tests/psql/probes/: 01_truncate.sql, 02_savepoint.sql, 03_temp_table.sql, 04_create_index_async.sql, 05_sys_jobs.sql, 06_ddl_dml_one_txn.sql, 07_two_ddl_one_txn.sql, 08_create_extension.sql, 09_serial_column.sql, 10_set_not_whitelisted.sql, 11_isolation_levels.sql
 - [x] T015 [P] [US2] Write mined probes in tests/psql/probes/: 20_denylist.sql (TestDenylist), 21_column_types.sql (TestColumnTypes), 22_identity_sequences.sql (TestIdentityAndSequences), 23_dsql_settings.sql (TestDsqlSettings), 24_txn_discipline.sql (TestTxnDiscipline), 25_txn_row_limit.sql (TestTxnLimits), 26_locking_reads.sql (TestLockingClauses/TestLockingReads), 27_alter_table.sql (TestAlterTableSubset/TestForeignKeys), 28_index_forms.sql (TestIndexAsync/TestIndexLimits), 29_txn_abort.sql (TestTransactionAbortSemantics)
 - [x] T016 [US2] Capture tests/psql/probes/expected/*.out from MiniStack; confirm two runs are identical (no job ids, OIDs, timestamps)
 - [x] T017 [US2] Run probes against a plain postgres:16 container on port 55432 to confirm DIFFER is reported without affecting the exit status
@@ -72,13 +72,13 @@ from micro-dsql.
 **Goal**: User Story 4 / FR-012..FR-014 / SC-006. Executed after M1; results in spec.md
 "Reconcile results", "Follow-ups / M2–M3 backlog" and "T1 exit checklist".
 
-- [x] T024 [US4] Start `micro-dsql --listen 127.0.0.1:<port>` and run tests/psql/run.sh against it; for each failing scenario either fix micro-dsql (M1 follow-up) or record it in tests/psql/known-gaps.txt and KNOWN_GAPS.md (constitution Principle V); never edit expected outputs to match micro-dsql
-- [x] T025 [US4] Run the five scenarios through the M1 tokio-postgres harness (extended protocol), e.g. a Rust integration test that replays tests/psql/*.sql statements, in tests/smoke/ (owned by the Rust workspace)
+- [x] T024 [US4] Start `micro-dsql --listen 127.0.0.1:<port>` and run tests/psql/run.sh against it; for each failing scenario either fix micro-dsql (M1 follow-up) or record it in tests/psql/known-gaps.txt and docs/known-gaps.md (constitution Principle V); never edit expected outputs to match micro-dsql
+- [x] T025 [US4] Run the five scenarios through the M1 tokio-postgres harness (extended protocol), e.g. a Rust integration test that replays tests/psql/*.sql statements, in crates/server/tests/smoke/ (owned by the Rust workspace)
 - [x] T026 [US4] Add layer-1 CI against micro-dsql (macOS + Linux) using the binary built by M1's workflow; make it blocking
 - [x] T027 [US4] Wire micro-dsql as target A in .github/workflows/differential.yml
 - [x] T028 [US4] Produce the first differential report with scripts/compare.sh (micro-dsql vs MiniStack) and list each probe mismatch as an M2/M3 backlog item (e.g. in a backlog doc or issues)
 - [x] T029 [US4] Add the 3-line quick start (start the binary, connect with psql, done) to README.md
-- [x] T030 [US4] Tick the T1 exit checklist in PLAN.md-derived docs once all of the above hold
+- [x] T030 [US4] Tick the T1 exit checklist in docs/plan.md-derived docs once all of the above hold
 
 ## Dependencies & Execution Order
 

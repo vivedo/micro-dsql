@@ -6,7 +6,7 @@
 
 ## Content Quality
 
-- [x] No implementation details (languages, frameworks, APIs) — beyond the CLI surface and pinned upstream commit that PLAN.md fixes as scope
+- [x] No implementation details (languages, frameworks, APIs) — beyond the CLI surface and pinned upstream commit that docs/plan.md fixes as scope
 - [x] Focused on user value and business needs
 - [x] Written for non-technical stakeholders (as far as a developer tool allows)
 - [x] All mandatory sections completed

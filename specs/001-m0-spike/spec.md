@@ -37,7 +37,7 @@ whole run.
 The maintainer runs an app-style schema migration and about 15 representative queries and gets a
 per-statement pass/fail record.
 
-**Why this priority**: PLAN.md says the app's own SQL "decides more than any generic test". No target app
+**Why this priority**: docs/plan.md says the app's own SQL "decides more than any generic test". No target app
 exists, so a representative stand-in is used.
 
 **Independent Test**: Run the app SQL script against the server; every statement's outcome (rows or
@@ -101,7 +101,7 @@ statement-level outcome of both sessions, and checks the final table state.
 The maintainer reads one document with the tested commit, toolchain, results tables, a verdict on every
 inferred research claim, and a go/no-go verdict with a blocker list.
 
-**Why this priority**: It is the milestone deliverable that PLAN.md mandates.
+**Why this priority**: It is the milestone deliverable that docs/plan.md mandates.
 
 **Independent Test**: `research/06-spike-findings.md` exists and every `[I]` item in research/02 and 04 has
 a CONFIRMED / REFUTED / NOT TESTED line with evidence.
@@ -109,7 +109,7 @@ a CONFIRMED / REFUTED / NOT TESTED line with evidence.
 **Acceptance Scenarios**:
 
 1. **Given** the experiments above, **When** the findings document is written, **Then** it ends with a
-   GO / NO-GO / CONDITIONAL verdict against the PLAN.md M0 criteria and a blocker list with rough effort.
+   GO / NO-GO / CONDITIONAL verdict against the docs/plan.md M0 criteria and a blocker list with rough effort.
 
 ### Edge Cases
 
@@ -139,7 +139,7 @@ a CONFIRMED / REFUTED / NOT TESTED line with evidence.
   MUST NOT contain machine-specific paths or hostnames.
 - **FR-007**: Local dependency directories (virtualenvs, node_modules, build outputs) MUST be gitignored.
 - **FR-008**: `research/06-spike-findings.md` MUST contain results tables, a CONFIRMED / REFUTED / NOT TESTED
-  line with evidence for every `[I]` item of research/02 and research/04, a go/no-go verdict against PLAN.md
+  line with evidence for every `[I]` item of research/02 and research/04, a go/no-go verdict against docs/plan.md
   M0 criteria, and the blocker list with rough effort.
 - **FR-009**: The spike MUST NOT modify the Turso clone (read and build only) and MUST NOT edit existing
   files under `research/`.
@@ -189,7 +189,7 @@ a CONFIRMED / REFUTED / NOT TESTED line with evidence.
   - psycopg is run twice, with default `%s` (binary ints) and forced-text `%t` placeholders
     (alternative: default only; reason: separates "driver unusable" from "usable with a setting").
   - pgx is run in its default mode and in `QueryExecModeSimpleProtocol` (same reason).
-  - A wire-level probe (`spike/drivers/wire_probe.py`) was added to find root causes behind driver
+  - A wire-level probe (`research/spike/drivers/wire_probe.py`) was added to find root causes behind driver
     failures (alternative: infer from driver errors; reason: evidence for the M1 blocker list).
   - Homebrew could not install `libpq`/`go` in this environment, so the same bottles were unpacked
     by hand (alternative: build from source; reason: fastest equivalent binaries). Scripts locate

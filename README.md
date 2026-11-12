@@ -5,8 +5,8 @@ database, for unit and integration tests and CI. One binary, no Docker; ordinary
 drivers connect to it with `sslmode=disable` and any user and password. It runs on the
 PostgreSQL frontend of [Turso](https://github.com/tursodatabase/turso), pinned to one commit.
 
-This is a proof of concept: see [PLAN.md](PLAN.md) for scope and milestones and
-[KNOWN_GAPS.md](KNOWN_GAPS.md) for what does not behave like DSQL yet.
+This is a proof of concept: see [docs/plan.md](docs/plan.md) for scope and milestones and
+[docs/known-gaps.md](docs/known-gaps.md) for what does not behave like DSQL yet.
 
 ## Quick start
 
@@ -48,11 +48,20 @@ cargo test --workspace
 PGHOST=127.0.0.1 PGPORT=5432 PGPASSWORD=x tests/psql/run.sh   # against a running micro-dsql
 ```
 
-Layout: `bin/micro-dsql` (CLI), `crates/server` (wire server, adapted from Turso's
-`postgres/server/lib.rs`, MIT, see [LICENSES/turso-MIT.txt](LICENSES/turso-MIT.txt)),
-`crates/policy` (DSQL rules on the `pg_query` AST, engine-agnostic), `tests/smoke`
-(integration tests), `tests/psql` (target-agnostic psql scenarios, see its README).
+## Repository layout
+
+```
+crates/
+  micro-dsql/   the binary: CLI flags, logging, signal handling (tests/: CLI tests)
+  server/       Postgres wire server, adapted from Turso's postgres/server/lib.rs (tests/: integration tests)
+  policy/       DSQL rules on the pg_query AST, engine-agnostic
+tests/psql/     target-agnostic psql scenarios and DSQL-rule probes (see its README)
+scripts/        MiniStack reference setup and the differential comparison
+docs/           plan and known gaps
+research/       background research and the M0 spike
+specs/          feature specifications, plans and task lists
+```
 
 ## Licence
 
-MIT, see [LICENSE](LICENSE). `crates/server` includes code adapted from Turso (MIT), see [LICENSES/turso-MIT.txt](LICENSES/turso-MIT.txt).
+MIT, see [LICENSE](LICENSE). `crates/server` includes code adapted from Turso (MIT), see [crates/server/LICENSE-turso](crates/server/LICENSE-turso).
