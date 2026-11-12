@@ -1,0 +1,20 @@
+{
+  "name": "micro-dsql-drizzle-check",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "A DSQL-shaped Drizzle project used to check migrations and queries against micro-dsql",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "generate": "drizzle-kit generate"
+  },
+  "dependencies": {
+    "drizzle-orm": "0.45.4",
+    "pg": "8.23.1"
+  },
+  "devDependencies": {
+    "drizzle-kit": "0.31.11"
+  }
+}

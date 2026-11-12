@@ -68,7 +68,19 @@ Code that would break on DSQL breaks here, with DSQL's SQLSTATE and message:
   `datestyle`, `extra_float_digits`, `intervalstyle`, `timezone`, `search_path`, the `enable_*`
   planner switches and `dsql.enable_batched_nestloop`); anything else is `0A000`. `SHOW` returns
   what was set.
-- **DDL**: a column typed bare `numeric` or `decimal` is `numeric(18,6)`.
+- **DDL**: a column typed bare `numeric` or `decimal` is `numeric(18,6)`. Indexes are built with
+  `CREATE [UNIQUE] INDEX ASYNC`; plain `CREATE INDEX`, `CONCURRENTLY`, access methods other than
+  `btree` and more than 8 key columns are refused. Identity columns must be `bigint` with an
+  explicit `CACHE` of 1 or at least 65536 (`CREATE SEQUENCE` needs one too); `ADD COLUMN` with a
+  default or constraint, `ALTER COLUMN TYPE`, `SET NOT NULL`, dropping a primary-key column and
+  every `ADD CONSTRAINT` other than `FOREIGN KEY`/`CHECK ... NOT VALID` are refused. A
+  `NOT VALID` constraint is added by rebuilding the table (see
+  [docs/known-gaps.md](docs/known-gaps.md) for the differences from DSQL).
+- **Jobs and `sys`**: `CREATE INDEX ASYNC` and `ALTER TABLE ASYNC ... VALIDATE CONSTRAINT` run to
+  completion before they return, answer with a `job_id` row and record the job in `sys.jobs`;
+  `CALL sys.wait_for_job('<id>')` returns `succeeded`, `SELECT sys.wait_for_job(...)` fails with
+  `42809` (it is a procedure), `SELECT * FROM sys.dsql_major_version()` returns `1`, and `sys` is
+  read-only for clients.
 
 Raise the log level to `debug` to see one line per refused statement with the rule id.
 
@@ -84,6 +96,21 @@ cargo test --workspace
 PGHOST=127.0.0.1 PGPORT=5432 PGPASSWORD=x tests/psql/run.sh   # against a running micro-dsql
 ```
 
+### Exit checks (outside `cargo test`)
+
+Two scripts check M3's goals against a running server (start micro-dsql on a free port first,
+fresh, and point `PGHOST`/`PGPORT`/`PGPASSWORD` at it; they exit `2` when a prerequisite is
+missing):
+
+```sh
+scripts/drizzle-check.sh   # a DSQL-shaped Drizzle project: migrations, queries, stock migrator; needs Node 22+ and npm
+scripts/conformance.sh     # Dreamescaper's golden probes against live-DSQL recordings; needs git, Go 1.27.1+ and network
+```
+
+`scripts/conformance.sh` fetches the probes at the commit pinned in `scripts/conformance/UPSTREAM`
+into `target/conformance/` and writes `reports/conformance-<date>.md` (both gitignored). See
+[tests/orm/drizzle/README.md](tests/orm/drizzle/README.md) for the Drizzle project.
+
 ## Repository layout
 
 ```
@@ -92,7 +119,8 @@ crates/
   server/       Postgres wire server, adapted from Turso's postgres/server/lib.rs (tests/: integration tests)
   policy/       DSQL rules on the pg_query AST, engine-agnostic
 tests/psql/     target-agnostic psql scenarios and DSQL-rule probes (see its README)
-scripts/        MiniStack reference setup and the differential comparison
+tests/orm/      Drizzle example project (migrations in DSQL form, runners, smoke)
+scripts/        MiniStack reference setup and differential comparison, drizzle-check.sh, conformance.sh
 docker/         container build helper (see Dockerfile)
 docs/           plan and known gaps
 research/       background research and the M0 spike

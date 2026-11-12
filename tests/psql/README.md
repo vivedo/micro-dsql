@@ -79,7 +79,13 @@ The probes record MiniStack's behaviour. Where MiniStack is known to differ from
 |---|---|---|
 | `12_session_identity` | `current_user` = `postgres`, `is_superuser` = `on`, collation `en_US.utf8` | `admin`, `off`, `C` |
 | `11_isolation_levels` | default `read committed`; every isolation level accepted | REPEATABLE READ only |
-| `05_sys_jobs` | `sys.dsql_major_version()` missing | returns `1` |
+| `05_sys_jobs` | `sys.dsql_major_version()` missing | returns `1` (micro-dsql: `1`) |
+| `04`, `05`, `27`, `28` | `SELECT sys.wait_for_job(:'job_id')` returns `t` (and `f` for a malformed id) | a procedure: `SELECT` fails with `42809 sys.wait_for_job(text) is a procedure`, `CALL sys.wait_for_job(...)` returns column `succeeded` (micro-dsql follows live DSQL, so those lines differ) |
+| `05_sys_jobs` | `class_id`, `object_id` described as `oid` | micro-dsql describes them as `integer` (known gap) |
+| `04`, `28` | `pg_indexes` lists `<table>_pkey`; `~` returns `t` | micro-dsql lists `__turso_internal_pk_index_<table>` and returns `1` for `~` (engine, not M3) |
+| `22_identity_sequences` | `identity columns are only supported on bigint columns` | `datatype integer not supported, identity column type must be bigint` (micro-dsql follows live DSQL) |
+| `27_alter_table` | `ALTER COLUMN TYPE is not supported`; `ALTER COLUMN SET/DROP DEFAULT`, `ADD CONSTRAINT ... NOT VALID` and `DROP CONSTRAINT` accepted | `unsupported ALTER TABLE ALTER COLUMN ... SET DATA TYPE statement` (micro-dsql follows live DSQL); the engine refuses `SET/DROP DEFAULT` and `DROP CONSTRAINT`, and `FOREIGN KEY ... NOT VALID` (known gaps) |
+| `28_index_forms` | `CREATE INDEX ASYNC IF NOT EXISTS ON ...` fails without a position; a volatile predicate is `42P17` | micro-dsql's `42601` carries a position, so psql prints `LINE 1:` context; the volatile predicate is the engine's own error |
 | `25_txn_row_limit` | only rows in `VALUES` lists count; error `25006` | every mutated row counts; `54000 transaction row limit exceeded` |
 | `21_column_types` | bare `numeric` stays `numeric` | `numeric(18,6)` |
 | `03_temp_table` | `CREATE TEMP VIEW` accepted | no temporary views |

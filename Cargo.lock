@@ -1562,6 +1562,7 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "turso_core",
+ "turso_parser",
  "turso_pg",
  "turso_pg_parser",
  "uuid",

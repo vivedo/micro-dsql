@@ -220,3 +220,103 @@ async fn deallocate_all_after_ddl_keeps_the_session_usable() {
     c.execute("DEALLOCATE ALL", &[]).await.unwrap();
     assert_eq!(value(&c, "SELECT 1").await, s("1"));
 }
+
+/// Parse, Bind and Execute the unnamed statement with no parameters, then Sync.
+fn extended(socket: &mut TcpStream, sql: &str) -> Vec<String> {
+    let mut parse = b"\0".to_vec();
+    parse.extend_from_slice(sql.as_bytes());
+    parse.extend_from_slice(b"\0\0\0");
+    send(socket, b'P', &parse);
+    send(socket, b'B', b"\0\0\0\0\0\0\0\0");
+    send(socket, b'E', b"\0\0\0\0\0");
+    send(socket, b'S', b"");
+    read_until_ready(socket)
+}
+
+/// The job statements answer rows under their own command tag, without a row count appended
+/// (pgwire adds one to every result set otherwise: `CREATE INDEX 1`).
+#[test]
+fn job_statements_complete_with_their_own_command_tags() {
+    let server = TestServer::start();
+    let (mut socket, _) = raw_startup(&server);
+    send(
+        &mut socket,
+        b'Q',
+        b"CREATE TABLE tagt (id int PRIMARY KEY, v text, w int)\0",
+    );
+    assert_eq!(read_until_ready(&mut socket), ["CREATE TABLE"]);
+    send(
+        &mut socket,
+        b'Q',
+        b"CREATE INDEX ASYNC tagt_v ON tagt (v)\0",
+    );
+    assert_eq!(read_until_ready(&mut socket), ["CREATE INDEX"]);
+    assert_eq!(
+        extended(&mut socket, "CREATE INDEX ASYNC tagt_w ON tagt (id, v)"),
+        ["CREATE INDEX"]
+    );
+    send(
+        &mut socket,
+        b'Q',
+        b"ALTER TABLE tagt ADD CONSTRAINT tagt_c CHECK (w > 0) NOT VALID\0",
+    );
+    assert_eq!(read_until_ready(&mut socket), ["ALTER TABLE"]);
+    assert_eq!(
+        extended(
+            &mut socket,
+            "ALTER TABLE ASYNC tagt VALIDATE CONSTRAINT tagt_c"
+        ),
+        ["ALTER TABLE"]
+    );
+    send(
+        &mut socket,
+        b'Q',
+        b"ALTER TABLE ASYNC tagt VALIDATE CONSTRAINT tagt_c\0",
+    );
+    assert_eq!(read_until_ready(&mut socket), ["ALTER TABLE"]);
+    // Ordinary results keep their row counts, and sys.dsql_major_version() is a plain SELECT.
+    send(&mut socket, b'Q', b"SELECT sys.dsql_major_version()\0");
+    assert_eq!(read_until_ready(&mut socket), ["SELECT 1"]);
+    assert_eq!(
+        extended(&mut socket, "SELECT sys.dsql_major_version()"),
+        ["SELECT 1"]
+    );
+    send(&mut socket, b'Q', b"SELECT job_id FROM sys.jobs\0");
+    assert_eq!(read_until_ready(&mut socket), ["SELECT 4"]);
+}
+
+/// Reads up to ReadyForQuery and returns its transaction status byte.
+fn ready_status(socket: &mut TcpStream) -> u8 {
+    loop {
+        let (tag, body) = read_message(socket);
+        if tag == b'Z' {
+            return body[0];
+        }
+        assert_ne!(tag, b'E', "unexpected error");
+    }
+}
+
+/// The table rebuild behind `ADD CONSTRAINT ... NOT VALID` opens its own transaction when the
+/// session is idle; the session must be idle again when the client's statement is answered.
+#[test]
+fn a_rebuild_leaves_an_idle_session_idle_and_a_transaction_open() {
+    let server = TestServer::start();
+    let (mut socket, _) = raw_startup(&server);
+    for sql in [
+        "CREATE TABLE rbs (id int PRIMARY KEY, w int)",
+        "ALTER TABLE rbs ADD CONSTRAINT rbs_w CHECK (w > 0) NOT VALID",
+    ] {
+        send(&mut socket, b'Q', format!("{sql}\0").as_bytes());
+        assert_eq!(ready_status(&mut socket), b'I', "{sql}");
+    }
+    send(&mut socket, b'Q', b"BEGIN\0");
+    assert_eq!(ready_status(&mut socket), b'T');
+    send(
+        &mut socket,
+        b'Q',
+        b"ALTER TABLE rbs ADD CONSTRAINT rbs_w2 CHECK (w < 100) NOT VALID\0",
+    );
+    assert_eq!(ready_status(&mut socket), b'T');
+    send(&mut socket, b'Q', b"ROLLBACK\0");
+    assert_eq!(ready_status(&mut socket), b'I');
+}

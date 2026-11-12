@@ -16,7 +16,7 @@ use tracing::debug;
 use turso_core::LimboError;
 use turso_pg::{PgConnection, TransactionState};
 
-use crate::{show_fields, Outcome};
+use crate::{ddl, reply_rows, show_fields, sys, Outcome};
 
 /// The session's transaction status, mirrored for the policy.
 pub(crate) fn txn_status(conn: &PgConnection) -> TxnStatus {
@@ -68,7 +68,7 @@ pub(crate) fn run_planned(
 ) -> PgWireResult<Outcome> {
     let admission = lock(policy).admit(plan, txn_status(conn), Instant::now());
     match admission {
-        Admission::Run { sql } => match run_engine(sql) {
+        Admission::Run { sql } => match dispatch(conn, plan, sql, format, run_engine) {
             Ok((outcome, rows)) => {
                 let result = lock(policy).complete(plan, rows, txn_status(conn), Instant::now());
                 match result {
@@ -101,6 +101,24 @@ pub(crate) fn run_planned(
     }
 }
 
+/// Where a statement the policy admitted runs: `sys` job statements, DDL with extra work, or
+/// the engine as is.
+fn dispatch(
+    conn: &PgConnection,
+    plan: &StatementPlan,
+    sql: &str,
+    format: &Format,
+    run_engine: impl FnOnce(&str) -> PgWireResult<(Outcome, u64)>,
+) -> PgWireResult<(Outcome, u64)> {
+    if plan.job.is_some() {
+        sys::run_job_statement(conn, plan, format, run_engine)
+    } else if plan.ddl.is_some() || !plan.prelude.is_empty() {
+        ddl::run_ddl_statement(conn, plan, run_engine)
+    } else {
+        run_engine(sql)
+    }
+}
+
 fn respond(reply: Reply, format: &Format) -> PgWireResult<Outcome> {
     match reply {
         Reply::Show { column, value } => {
@@ -113,6 +131,7 @@ fn respond(reply: Reply, format: &Format) -> PgWireResult<Outcome> {
             })
         }
         Reply::Command { tag } => Ok(Outcome::Command(Tag::new(tag))),
+        Reply::Rows { tag, columns, rows } => reply_rows(&tag, &columns, &rows, format),
     }
 }
 
@@ -198,8 +217,16 @@ mod tests {
         }
 
         fn refuse(level: tracing::Level, sqls: &[&str]) -> String {
+            refuse_after(level, &[], sqls)
+        }
+
+        /// Like `refuse`, after running `setup` on the connection (outside the policy).
+        fn refuse_after(level: tracing::Level, setup: &[&str], sqls: &[&str]) -> String {
             let db = open_database(&Storage::Memory).unwrap();
             let conn = PgConnection::connect_with(&db, ConnectOpts::new()).unwrap();
+            for sql in setup {
+                crate::internal::exec(&conn, sql).unwrap();
+            }
             let policy = Mutex::new(SessionPolicy::new(PolicyLimits::default()));
             let captured = Captured::default();
             let subscriber = tracing_subscriber::fmt()
@@ -213,6 +240,7 @@ mod tests {
                     let result = run_planned(&conn, &policy, &plan, &Format::UnifiedText, |_| {
                         panic!("a refused statement must not reach the engine: {sql}")
                     });
+                    assert_eq!(txn_status(&conn), TxnStatus::Idle, "{sql}");
                     assert!(result.is_err(), "{sql}");
                 }
             });
@@ -229,6 +257,26 @@ mod tests {
             let log = refuse(tracing::Level::DEBUG, &["TRUNCATE t", "SAVEPOINT a"]);
             assert_eq!(log.lines().count(), 2, "{log}");
             assert!(log.contains("savepoint"), "{log}");
+        }
+
+        /// FR-033 for the one refusal the server decides (from the catalog): it is logged once
+        /// with its rule id, like the stateless ones.
+        #[test]
+        fn a_primary_key_column_refusal_is_logged_once_with_the_rule_id() {
+            let log = refuse_after(
+                tracing::Level::DEBUG,
+                &["CREATE TABLE pkt (id int PRIMARY KEY, v text)"],
+                &["ALTER TABLE pkt DROP COLUMN id"],
+            );
+            // The catalog lookup the check makes logs at debug level too (the engine's own
+            // lines); only the refusal's line counts here.
+            let refusals: Vec<&str> = log
+                .lines()
+                .filter(|line| line.contains("statement refused"))
+                .collect();
+            assert_eq!(refusals.len(), 1, "{log}");
+            assert!(refusals[0].contains("DEBUG"), "{log}");
+            assert!(refusals[0].contains("drop_pk_column"), "{log}");
         }
 
         #[test]
