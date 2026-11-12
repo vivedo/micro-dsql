@@ -9,7 +9,7 @@ All observations below were made on 2026-11-12 on branch `007-m4-occ-fidelity` (
   one in-memory database with `micro_dsql_server::open_database` and two
   `turso_pg::PgConnection`s, prints every statement's raw `LimboError` variant and the session's
   `TransactionState`, and runs multi-threaded storms. The scenarios are re-created as committed
-  tests by tasks.md (Phase 2, T010–T013).
+  tests by tasks.md (T010–T013, T020–T022, T030–T031, T041, T050).
 
 ## 1. Observed behaviour today
 
