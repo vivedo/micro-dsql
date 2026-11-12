@@ -7,15 +7,35 @@
 
 use std::borrow::Cow;
 
+use pg_query::protobuf::Token;
 use pg_query::NodeEnum;
 
 use crate::rules::new_columns;
 
-/// Inserts `insert` at byte offset `at` of the original text.
+/// Replaces the `remove` bytes at byte offset `at` of the original text with `insert`
+/// (`remove == 0` is a pure insert).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TextEdit {
     pub at: usize,
+    pub remove: usize,
     pub insert: String,
+}
+
+/// Which statement the DSQL `ASYNC` keyword was found in.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AsyncKind {
+    /// `CREATE [UNIQUE] INDEX ASYNC ...`
+    Index,
+    /// `ALTER TABLE ASYNC ...`
+    AlterTable,
+}
+
+/// The result of [`pre_parse`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PreParsed<'a> {
+    /// The text with the `ASYNC` keyword blanked (same byte length as the input).
+    pub text: Cow<'a, str>,
+    pub async_kind: Option<AsyncKind>,
 }
 
 /// An AST rewrite: looks at one parsed statement and its text, returns edits.
@@ -55,31 +75,115 @@ fn bare_numeric(node: &NodeEnum, sql: &str) -> Vec<TextEdit> {
                 .find(|t| usize::try_from(t.start).ok() == Some(start))?;
             Some(TextEdit {
                 at: usize::try_from(token.end).ok()?,
+                remove: 0,
                 insert: "(18,6)".to_owned(),
             })
         })
         .collect()
 }
 
-/// Stage 1: raw text before parsing. Identity today.
-pub fn pre_parse(sql: &str) -> Cow<'_, str> {
-    Cow::Borrowed(sql)
+/// Stage 1: raw text before parsing (research.md D1).
+///
+/// DSQL's `ASYNC` keyword (`CREATE [UNIQUE] INDEX ASYNC ...`, `ALTER TABLE ASYNC ...`) is not
+/// PostgreSQL syntax. It is replaced by five spaces, so every byte offset (error positions,
+/// AST locations, later edits) means the same in both texts. Only a keyword token counts:
+/// comments, string literals and quoted identifiers are never touched, and `ALTER TABLE async
+/// ADD COLUMN ...` (a table called `async`) is left alone.
+pub fn pre_parse(sql: &str) -> PreParsed<'_> {
+    let unchanged = || PreParsed {
+        text: Cow::Borrowed(sql),
+        async_kind: None,
+    };
+    // Only text that mentions the word is scanned.
+    if !sql
+        .as_bytes()
+        .windows(5)
+        .any(|w| w.eq_ignore_ascii_case(b"async"))
+    {
+        return unchanged();
+    }
+    let Ok(scanned) = pg_query::scan(sql) else {
+        return unchanged();
+    };
+    let tokens: Vec<(Token, usize, usize)> = scanned
+        .tokens
+        .iter()
+        .filter_map(|t| {
+            Some((
+                Token::try_from(t.token).ok()?,
+                usize::try_from(t.start).ok()?,
+                usize::try_from(t.end).ok()?,
+            ))
+        })
+        .collect();
+    let is_async = |i: usize| {
+        tokens.get(i).is_some_and(|&(token, start, end)| {
+            token == Token::Ident
+                && sql
+                    .get(start..end)
+                    .is_some_and(|text| text.eq_ignore_ascii_case("async"))
+        })
+    };
+    let kind_at = |i: usize| tokens.get(i).map(|t| t.0);
+    let mut blanks: Vec<(usize, usize)> = Vec::new();
+    let mut found = None;
+    for i in 0..tokens.len() {
+        let (kind, at) = match kind_at(i) {
+            Some(Token::Create) => {
+                let mut j = i + 1;
+                if kind_at(j) == Some(Token::Unique) {
+                    j += 1;
+                }
+                if kind_at(j) != Some(Token::Index) || !is_async(j + 1) {
+                    continue;
+                }
+                // `CREATE INDEX ASYNC public.i`: the blanked text fails at the dot, like DSQL.
+                (AsyncKind::Index, j + 1)
+            }
+            Some(Token::Alter) => {
+                // `ALTER TABLE ASYNC t ...`: a table called `async` is followed by a keyword.
+                if kind_at(i + 1) != Some(Token::Table)
+                    || !is_async(i + 2)
+                    || kind_at(i + 3) != Some(Token::Ident)
+                {
+                    continue;
+                }
+                (AsyncKind::AlterTable, i + 2)
+            }
+            _ => continue,
+        };
+        blanks.push((tokens[at].1, tokens[at].2));
+        found.get_or_insert(kind);
+    }
+    let Some(async_kind) = found else {
+        return unchanged();
+    };
+    let mut text = sql.to_owned();
+    for (start, end) in blanks {
+        text.replace_range(start..end, &" ".repeat(end - start));
+    }
+    PreParsed {
+        text: Cow::Owned(text),
+        async_kind: Some(async_kind),
+    }
 }
 
-/// Applies non-overlapping inserts; offsets are bytes of the original text.
+/// Applies non-overlapping edits; offsets are bytes of the original text. An insert may sit
+/// at the start or end of a replaced span.
 pub fn apply_edits<'a>(sql: &'a str, edits: &[TextEdit]) -> Cow<'a, str> {
     if edits.is_empty() {
         return Cow::Borrowed(sql);
     }
     let mut sorted: Vec<&TextEdit> = edits.iter().collect();
-    sorted.sort_by_key(|e| e.at);
+    sorted.sort_by_key(|e| (e.at, e.remove));
     let mut out = String::with_capacity(sql.len() + 8 * sorted.len());
     let mut from = 0;
     for edit in sorted {
+        debug_assert!(edit.at >= from, "overlapping edits at byte {}", edit.at);
         let at = edit.at.max(from).min(sql.len());
         out.push_str(&sql[from..at]);
         out.push_str(&edit.insert);
-        from = at;
+        from = (at + edit.remove).min(sql.len());
     }
     out.push_str(&sql[from..]);
     Cow::Owned(out)
@@ -97,11 +201,77 @@ pub fn ast_rewrites(node: &NodeEnum, sql: &str) -> Vec<TextEdit> {
 mod tests {
     use super::*;
 
+    fn blanked(sql: &str) -> (String, Option<AsyncKind>) {
+        let pre = pre_parse(sql);
+        (pre.text.into_owned(), pre.async_kind)
+    }
+
     #[test]
-    fn pre_parse_is_identity() {
-        let out = pre_parse("SELECT 1");
-        assert_eq!(out, "SELECT 1");
-        assert!(matches!(out, Cow::Borrowed(_)));
+    fn async_after_create_index_is_blanked() {
+        for (sql, kind) in [
+            ("CREATE INDEX ASYNC i ON t (c)", AsyncKind::Index),
+            ("CREATE UNIQUE INDEX ASYNC i ON t (c)", AsyncKind::Index),
+            ("create index async i on t (c)", AsyncKind::Index),
+            (
+                "CREATE INDEX ASYNC IF NOT EXISTS i ON t (c)",
+                AsyncKind::Index,
+            ),
+            ("CREATE INDEX ASYNC ON t (c)", AsyncKind::Index),
+            (
+                "ALTER TABLE ASYNC t VALIDATE CONSTRAINT c",
+                AsyncKind::AlterTable,
+            ),
+            (
+                "alter table async \"t\" validate constraint c",
+                AsyncKind::AlterTable,
+            ),
+        ] {
+            let (text, found) = blanked(sql);
+            assert_eq!(found, Some(kind), "{sql}");
+            assert_eq!(text.len(), sql.len(), "{sql}");
+            assert!(!text.to_ascii_lowercase().contains("async"), "{text}");
+            let at = sql.to_ascii_lowercase().find("async").unwrap();
+            assert_eq!(&text[at..at + 5], "     ", "{sql}");
+            assert_eq!(&text[..at], &sql[..at]);
+            assert_eq!(&text[at + 5..], &sql[at + 5..]);
+        }
+    }
+
+    #[test]
+    fn async_elsewhere_is_left_alone() {
+        for sql in [
+            "SELECT 1",
+            "SELECT 'CREATE INDEX ASYNC i ON t (c)'",
+            "/* CREATE INDEX ASYNC i ON t (c) */ SELECT 1",
+            "-- CREATE INDEX ASYNC i ON t (c)\nSELECT 1",
+            "CREATE INDEX \"async\" ON t (c)",
+            "CREATE TABLE async (id int)",
+            "ALTER TABLE async ADD COLUMN c int",
+            "ALTER TABLE \"async\" ADD COLUMN c int",
+            "SELECT async FROM t",
+            "CREATE INDEX i ON t (async)",
+        ] {
+            let pre = pre_parse(sql);
+            assert_eq!(pre.async_kind, None, "{sql}");
+            assert_eq!(pre.text, sql);
+            assert!(matches!(pre.text, Cow::Borrowed(_)), "{sql}");
+        }
+    }
+
+    #[test]
+    fn a_qualified_async_index_name_still_fails_to_parse() {
+        let (text, kind) = blanked("CREATE INDEX ASYNC public.i ON t (c)");
+        assert_eq!(kind, Some(AsyncKind::Index));
+        assert!(pg_query::parse(&text).is_err());
+        assert!(pg_query::parse("CREATE INDEX ASYNC i ON t (c)").is_err());
+        assert!(pg_query::parse(&blanked("CREATE INDEX ASYNC i ON t (c)").0).is_ok());
+    }
+
+    #[test]
+    fn async_in_a_multi_statement_string() {
+        let (text, kind) = blanked("BEGIN; CREATE INDEX ASYNC i ON t (c); COMMIT");
+        assert_eq!(kind, Some(AsyncKind::Index));
+        assert_eq!(text, "BEGIN; CREATE INDEX       i ON t (c); COMMIT");
     }
 
     #[test]
@@ -110,10 +280,12 @@ mod tests {
         let edits = [
             TextEdit {
                 at: 4,
+                remove: 0,
                 insert: "[2]".into(),
             },
             TextEdit {
                 at: 1,
+                remove: 0,
                 insert: "[1]".into(),
             },
         ];
@@ -122,6 +294,7 @@ mod tests {
         assert!(matches!(apply_edits(sql, &[]), Cow::Borrowed(_)));
         let end = [TextEdit {
             at: 6,
+            remove: 0,
             insert: "!".into(),
         }];
         assert_eq!(apply_edits(sql, &end), "abcdef!");
@@ -132,9 +305,72 @@ mod tests {
         let sql = "é1";
         let edits = [TextEdit {
             at: 2,
+            remove: 0,
             insert: "-".into(),
         }];
         assert_eq!(apply_edits(sql, &edits), "é-1");
+        let replace = [TextEdit {
+            at: 0,
+            remove: 2,
+            insert: "e".into(),
+        }];
+        assert_eq!(apply_edits(sql, &replace), "e1");
+    }
+
+    #[test]
+    fn apply_edits_replaces_spans() {
+        let sql = "abcdef";
+        let edits = [
+            TextEdit {
+                at: 3,
+                remove: 2,
+                insert: "XYZ".into(),
+            },
+            TextEdit {
+                at: 1,
+                remove: 1,
+                insert: String::new(),
+            },
+            TextEdit {
+                at: 0,
+                remove: 0,
+                insert: ">".into(),
+            },
+        ];
+        assert_eq!(apply_edits(sql, &edits), ">acXYZf");
+        // An insert at the start of a replaced span and one at its end.
+        let edits = [
+            TextEdit {
+                at: 2,
+                remove: 2,
+                insert: "-".into(),
+            },
+            TextEdit {
+                at: 4,
+                remove: 0,
+                insert: "+".into(),
+            },
+        ];
+        assert_eq!(apply_edits(sql, &edits), "ab-+ef");
+    }
+
+    #[test]
+    #[cfg(debug_assertions)]
+    #[should_panic(expected = "overlapping")]
+    fn apply_edits_rejects_overlapping_edits() {
+        let edits = [
+            TextEdit {
+                at: 1,
+                remove: 3,
+                insert: "x".into(),
+            },
+            TextEdit {
+                at: 2,
+                remove: 1,
+                insert: "y".into(),
+            },
+        ];
+        let _ = apply_edits("abcdef", &edits);
     }
 
     fn rewritten(sql: &str) -> String {

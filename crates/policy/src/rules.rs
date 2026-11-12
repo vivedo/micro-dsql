@@ -16,9 +16,18 @@ pub struct Rule {
     pub check: fn(&NodeEnum, &str) -> Option<PolicyError>,
 }
 
-/// The first deny rule that matches the statement.
-pub fn check_rules(node: &NodeEnum, sql: &str) -> Option<PolicyError> {
-    RULES.iter().find_map(|rule| (rule.check)(node, sql))
+/// What the pre-parse learned about the statement text (rules that need more than the AST).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct RuleContext {
+    pub async_kind: Option<crate::rewrite::AsyncKind>,
+}
+
+/// The first deny rule that matches the statement: 005's table first, then the M3 DDL rules.
+pub fn check_rules(node: &NodeEnum, sql: &str, ctx: &RuleContext) -> Option<PolicyError> {
+    RULES
+        .iter()
+        .find_map(|rule| (rule.check)(node, sql))
+        .or_else(|| crate::ddl_rules::check(node, sql, ctx))
 }
 
 fn refused(id: &'static str, message: &str) -> Option<PolicyError> {
@@ -301,7 +310,7 @@ mod tests {
             .node
             .as_ref()
             .unwrap();
-        check_rules(node, sql)
+        check_rules(node, sql, &RuleContext::default())
     }
 
     /// (sql, rule id, SQLSTATE, message)

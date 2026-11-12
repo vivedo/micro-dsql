@@ -45,13 +45,22 @@
 //   crate); engine conflicts and lock contention are sent as DSQL's 40001 OC000/OC001 errors
 //   (`55P03` is mapped to OC000 until autocommit runs as a transaction); errors raised by the
 //   policy carry their own SQLSTATE, message and DETAIL;
+// - M3 (DDL for ORMs): DSQL's `ASYNC` keyword is blanked before the syntax check and the
+//   parameter analysis, job statements (`CREATE INDEX ASYNC`, `CALL sys.wait_for_job`, ...)
+//   are answered through `sys.jobs` by `sys.rs`, DDL with prelude statements, cleanup or
+//   constraint work runs through `ddl.rs`; `Outcome::TaggedRows` and `reply_rows` carry the
+//   typed rows of those answers; `open_database` creates `sys.jobs`;
 // - the upstream unit tests (which need Turso's internal test client) are not carried
 //   over; crates/server/tests/smoke covers the behaviour.
 
 mod binary;
 mod conn;
+mod constraints;
+mod ddl;
 mod dsql;
+mod internal;
 mod startup;
+mod sys;
 
 use std::fmt::Debug;
 use std::net::SocketAddr;
@@ -72,8 +81,8 @@ use turso_pg_parser::ParseResult;
 
 use micro_dsql_policy::params::Column;
 use micro_dsql_policy::{
-    ParamHint, PolicyError, PolicyLimits, ResultHint, SessionPolicy, SettingCommand, StatementPlan,
-    TxnStatus,
+    ColumnType, ParamHint, PolicyError, PolicyLimits, ReplyColumn, ResultHint, SessionPolicy,
+    SettingCommand, StatementPlan, TxnStatus,
 };
 
 use pgwire::api::portal::{Format, Portal};
@@ -160,6 +169,7 @@ pub fn open_database(storage: &Storage) -> anyhow::Result<Arc<Database>> {
             turso_pg::open_database(path, None, OpenFlags::default(), opts)?.1
         }
     };
+    sys::bootstrap(&db)?;
     Ok(db)
 }
 
@@ -304,7 +314,7 @@ pub struct PgStatement {
 
 impl PgStatement {
     fn analyze(conn: &PgConnection, sql: String, declared: &[Option<Type>]) -> Self {
-        let shape = micro_dsql_policy::analyze(&sql);
+        let shape = micro_dsql_policy::analyze(&micro_dsql_policy::rewrite::pre_parse(&sql).text);
         let count = shape.params.len().max(declared.len());
         let param_types = (0..count)
             .map(|i| match declared.get(i) {
@@ -381,6 +391,12 @@ enum Outcome {
         rows: Vec<PgWireResult<DataRow>>,
     },
     Command(Tag),
+    /// Rows answered with a command tag of their own (`CREATE INDEX` plus a `job_id` row).
+    TaggedRows {
+        tag: String,
+        header: Arc<Vec<FieldInfo>>,
+        rows: Vec<PgWireResult<DataRow>>,
+    },
     Copy {
         column_count: i16,
         rows: Vec<Vec<u8>>,
@@ -394,6 +410,11 @@ impl Outcome {
         match self {
             Outcome::Rows { header, rows } => {
                 Response::Query(QueryResponse::new(header, stream::iter(rows)))
+            }
+            Outcome::TaggedRows { tag, header, rows } => {
+                let mut response = QueryResponse::new(header, stream::iter(rows));
+                response.set_command_tag(&tag);
+                Response::Query(response)
             }
             Outcome::Command(tag) => Response::Execution(tag),
             Outcome::Copy { .. } => unreachable!("COPY is only run by the simple protocol"),
@@ -460,7 +481,10 @@ impl TursoPgHandler {
                 conn.abort_transaction_block_on_error();
                 pg_error(turso_core::LimboError::ParseError(error.to_string()).into())
             };
-            turso_pg_parser::parse(&text).map_err(parse_error)?;
+            // DSQL's `ASYNC` keyword is blanked for the syntax check; the statements are
+            // split from the client's text and planned (blanked again) one by one.
+            let checked = micro_dsql_policy::rewrite::pre_parse(&text);
+            turso_pg_parser::parse(&checked.text).map_err(parse_error)?;
             let statements = turso_pg_parser::split_statements(&text).map_err(parse_error)?;
             plan_statements(&conn, &policy, &statements)
         })
@@ -552,6 +576,51 @@ fn show_fields(column: &str, format: &Format) -> Vec<FieldInfo> {
         Type::TEXT,
         format.format_for(0),
     )]
+}
+
+/// The result fields of a statement the policy or the server answers itself.
+fn reply_fields(columns: &[ReplyColumn], format: &Format) -> Vec<FieldInfo> {
+    columns
+        .iter()
+        .enumerate()
+        .map(|(i, column)| {
+            let ty = match column.ty {
+                ColumnType::Text => Type::TEXT,
+                ColumnType::Bool => Type::BOOL,
+                ColumnType::Int4 => Type::INT4,
+            };
+            FieldInfo::new(column.name.clone(), None, None, ty, format.format_for(i))
+        })
+        .collect()
+}
+
+/// A result set built from text values (`t`/`f` for booleans).
+fn reply_rows(
+    tag: &str,
+    columns: &[ReplyColumn],
+    rows: &[Vec<Option<String>>],
+    format: &Format,
+) -> PgWireResult<Outcome> {
+    let header = Arc::new(reply_fields(columns, format));
+    let mut encoded = Vec::with_capacity(rows.len());
+    for row in rows {
+        let mut encoder = DataRowEncoder::new(header.clone());
+        for (column, value) in columns.iter().zip(row) {
+            match column.ty {
+                ColumnType::Text => encoder.encode_field(&value.as_deref())?,
+                ColumnType::Bool => encoder.encode_field(&value.as_deref().map(|v| v == "t"))?,
+                ColumnType::Int4 => {
+                    encoder.encode_field(&value.as_deref().and_then(|v| v.parse::<i32>().ok()))?
+                }
+            }
+        }
+        encoded.push(encoder.finish());
+    }
+    Ok(Outcome::TaggedRows {
+        tag: tag.to_owned(),
+        header,
+        rows: encoded,
+    })
 }
 
 /// Runs `COPY ... TO STDOUT` (blocking), collecting the encoded rows.
@@ -757,8 +826,8 @@ fn describe(
         if plan.refusal.is_some() {
             return Ok(vec![]);
         }
-        if let Some(column) = plan.show_column() {
-            return Ok(show_fields(column, format));
+        if let Some(columns) = plan.reply_columns() {
+            return Ok(reply_fields(&columns, format));
         }
         let answered_here = match &plan.setting {
             Some(SettingCommand::ResetAll) | None => plan.intercept.is_some(),

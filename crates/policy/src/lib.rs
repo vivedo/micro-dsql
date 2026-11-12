@@ -18,8 +18,11 @@
 //! - [`params`]: `$n` parameter counting and type hints, and result-column type hints.
 
 pub mod classify;
+pub mod ddl_rules;
 pub mod errors;
+pub mod identity;
 pub mod intercept;
+pub mod jobs;
 pub mod params;
 pub mod rewrite;
 pub mod rules;
@@ -36,6 +39,8 @@ pub use errors::{
 };
 pub use intercept::{intercept, Intercept};
 pub use params::{analyze, ParamHint, ResultHint, StatementShape};
-pub use session::{Admission, PolicyLimits, Reply, SessionPolicy, TxnState, TxnStatus};
+pub use session::{
+    Admission, ColumnType, PolicyLimits, Reply, ReplyColumn, SessionPolicy, TxnState, TxnStatus,
+};
 pub use settings::{SessionSettings, SettingCommand};
 pub use statement::StatementPlan;

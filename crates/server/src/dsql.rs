@@ -16,7 +16,7 @@ use tracing::debug;
 use turso_core::LimboError;
 use turso_pg::{PgConnection, TransactionState};
 
-use crate::{show_fields, Outcome};
+use crate::{ddl, reply_rows, show_fields, sys, Outcome};
 
 /// The session's transaction status, mirrored for the policy.
 pub(crate) fn txn_status(conn: &PgConnection) -> TxnStatus {
@@ -68,7 +68,7 @@ pub(crate) fn run_planned(
 ) -> PgWireResult<Outcome> {
     let admission = lock(policy).admit(plan, txn_status(conn), Instant::now());
     match admission {
-        Admission::Run { sql } => match run_engine(sql) {
+        Admission::Run { sql } => match dispatch(conn, plan, sql, run_engine) {
             Ok((outcome, rows)) => {
                 let result = lock(policy).complete(plan, rows, txn_status(conn), Instant::now());
                 match result {
@@ -101,6 +101,23 @@ pub(crate) fn run_planned(
     }
 }
 
+/// Where a statement the policy admitted runs: `sys` job statements, DDL with extra work, or
+/// the engine as is.
+fn dispatch(
+    conn: &PgConnection,
+    plan: &StatementPlan,
+    sql: &str,
+    run_engine: impl FnOnce(&str) -> PgWireResult<(Outcome, u64)>,
+) -> PgWireResult<(Outcome, u64)> {
+    if plan.job.is_some() {
+        sys::run_job_statement(conn, plan, run_engine)
+    } else if plan.ddl.is_some() || !plan.prelude.is_empty() {
+        ddl::run_ddl_statement(conn, plan, run_engine)
+    } else {
+        run_engine(sql)
+    }
+}
+
 fn respond(reply: Reply, format: &Format) -> PgWireResult<Outcome> {
     match reply {
         Reply::Show { column, value } => {
@@ -113,6 +130,7 @@ fn respond(reply: Reply, format: &Format) -> PgWireResult<Outcome> {
             })
         }
         Reply::Command { tag } => Ok(Outcome::Command(Tag::new(tag))),
+        Reply::Rows { tag, columns, rows } => reply_rows(&tag, &columns, &rows, format),
     }
 }
 

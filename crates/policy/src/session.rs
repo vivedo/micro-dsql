@@ -37,6 +37,21 @@ pub enum TxnStatus {
     Aborted,
 }
 
+/// The wire type of a column of a [`Reply::Rows`] answer.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ColumnType {
+    Text,
+    Bool,
+    Int4,
+}
+
+/// One column of a [`Reply::Rows`] answer.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ReplyColumn {
+    pub name: String,
+    pub ty: ColumnType,
+}
+
 /// How the server answers a statement the policy answers itself.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Reply {
@@ -44,6 +59,12 @@ pub enum Reply {
     Show { column: String, value: String },
     /// A command tag.
     Command { tag: &'static str },
+    /// Rows of typed columns (values in their text form) and the command tag.
+    Rows {
+        tag: String,
+        columns: Vec<ReplyColumn>,
+        rows: Vec<Vec<Option<String>>>,
+    },
 }
 
 /// What to do with a statement.

@@ -353,3 +353,33 @@ does not), `submitted`/`processing` states, invalid indexes after a failed uniqu
 (identity prelude, job insert) run in whatever transaction the session is in; outside a
 transaction they run as consecutive autocommit statements with `cleanup_on_failure`
 compensation, never by opening a transaction (that is 007's territory).
+
+## 6. D7 spike result (T032, implementation, 2026-11-12)
+
+Spike on a PG-dialect `PgConnection` at the pinned rev (`d5fdf4d`), building
+`ast::AlterTableBody::AlterColumn` (the column's definition read from the schema with
+`BTreeTable::to_sql()` and parsed by `turso_parser`, plus a constraint translated by
+`PostgreSQLTranslator` from a synthetic `CREATE TABLE`), prepared with
+`conn.inner().prepare_translated_stmt(stmt, text)`:
+
+| Check | `CHECK (w > 0)` | `REFERENCES p (id) ON DELETE CASCADE` |
+|---|---|---|
+| (a) prepares and runs, inside and outside a transaction | yes | yes (no error) |
+| (b) new violating rows rejected, constraint named | yes: `new row for relation "c" violates check constraint "c_chk"` | **no**: orphan insert succeeds, parent delete does not cascade |
+| (c) existing violating rows not checked | **no**: the ALTER fails (`CHECK constraint failed: c_chk`) when a row violates | yes (nothing is checked, nothing is enforced) |
+| (d) data, indexes, PK, defaults survive | yes | yes |
+| (e) `pg_constraint` | `c_chk`, contype `c`, `convalidated` true, `conkey` 3, `pg_get_constraintdef` = `CHECK (w > 0)` | no row; `BTreeTable.foreign_keys` stays empty |
+
+Cause for the FK: `op_alter_column` (core/vdbe/execute.rs) replaces the column and re-adds the
+CHECK constraints of the new definition but never adds the definition's `ForeignKey` constraints
+to `btree.foreign_keys` (the translator only uses them to validate a clone). Even a forced schema
+reparse does not produce an enforced foreign key. Cause for the CHECK: the core engine validates
+existing rows when it adds a CHECK.
+
+Consequence: an enforced single-column foreign key cannot be added through the core `ALTER
+COLUMN` path, and a `CHECK ... NOT VALID` over violating rows cannot be expressed. This is the
+T032 failure case; no Turso patch was introduced (owner choice T033). The server implements
+what the path supports: `CHECK ... NOT VALID` (fails with the engine's check error when an
+existing row violates it), `ALTER TABLE ASYNC ... VALIDATE CONSTRAINT` for CHECK constraints, and
+leaves `FOREIGN KEY ... NOT VALID` to the engine's own answer (`42601 ALTER TABLE ADD CONSTRAINT
+is not supported`) until the owner decides.
