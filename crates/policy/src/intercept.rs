@@ -3,6 +3,7 @@
 use pg_query::protobuf::{a_const, VariableSetKind};
 use pg_query::NodeEnum;
 
+use crate::errors::PolicyError;
 use crate::server_params::{is_utc_spelling, show_parameter};
 
 /// A statement the server answers itself.
@@ -20,10 +21,7 @@ pub enum Intercept {
     /// the wire server's store (drivers such as psycopg send `DEALLOCATE ALL` after DDL).
     Deallocate { name: Option<String> },
     /// A statement rejected with an error.
-    Error {
-        sqlstate: &'static str,
-        message: String,
-    },
+    Error(PolicyError),
 }
 
 /// Classifies one SQL statement. Returns `None` for anything the engine should run, including
@@ -33,7 +31,12 @@ pub fn intercept(sql: &str) -> Option<Intercept> {
     let [raw] = parsed.protobuf.stmts.as_slice() else {
         return None;
     };
-    match raw.stmt.as_ref()?.node.as_ref()? {
+    intercept_node(raw.stmt.as_ref()?.node.as_ref()?)
+}
+
+/// Like [`intercept`], for a statement that is already parsed.
+pub fn intercept_node(node: &NodeEnum) -> Option<Intercept> {
+    match node {
         NodeEnum::VariableShowStmt(show) => {
             show_parameter(&show.name).map(|(column, value)| Intercept::Show { column, value })
         }
@@ -55,13 +58,14 @@ pub fn intercept(sql: &str) -> Option<Intercept> {
                     if is_utc_spelling(&value) {
                         Some(Intercept::SetNoop { tag: "SET" })
                     } else {
-                        Some(Intercept::Error {
-                            sqlstate: "22023",
-                            message: format!(
+                        Some(Intercept::Error(PolicyError::new(
+                            "set_timezone",
+                            "22023",
+                            format!(
                                 "invalid value for parameter \"TimeZone\": \"{value}\"; \
                                  supported value is \"UTC\""
                             ),
-                        })
+                        )))
                     }
                 }
                 _ => None,
@@ -166,7 +170,7 @@ mod tests {
     #[test]
     fn set_timezone_other_values_are_rejected() {
         match intercept("SET timezone = 'Europe/Rome'") {
-            Some(Intercept::Error { sqlstate, .. }) => assert_eq!(sqlstate, "22023"),
+            Some(Intercept::Error(e)) => assert_eq!(e.sqlstate, "22023"),
             other => panic!("{other:?}"),
         }
     }
