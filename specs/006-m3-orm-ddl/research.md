@@ -480,3 +480,34 @@ unchanged; (f) a concurrent writer gets `40001` OC001, never a hang or a corrupt
 column order, types (incl. `uuid`, `jsonb`, `numeric(p,s)`, `timestamptz`, `varchar(n)`) and
 `DEFAULT` expressions survive the `to_sql()` round trip. Any failed item that cannot be fixed in the
 server layer → fallback (§8 above), reported.
+
+## 9. Rebuild spike and exit runs (implementation round 2, 2026-11-12)
+
+**Spike T071/T072 result: the rebuild is safe; D13 stands with two corrections.**
+- The new table is created from **PostgreSQL text**, not from an engine AST: a PostgreSQL table's
+  stored schema text is the statement it was created with, re-parsed by the PG frontend, so an AST
+  prepared with `prepare_translated_stmt` fails (`STRICT` is not PG syntax) or leaves a foreign
+  key without its namespace. The server parses `BTreeTable::to_sql()` with `turso_parser`, names
+  every constraint explicitly (`<table>_pkey`, `_<col>_key`, `_<col>_check`, `_<col>_fkey`: the
+  names PostgreSQL derives, which `pg_constraint` showed before), adds the new constraint as a
+  column constraint translated from a synthetic `CREATE TABLE`, drops `STRICT` and renders the AST
+  to text that the connection executes. Foreign keys to another schema are refused (`0A000`).
+- Implicit constraint names do not follow a rename (`c3__r_pkey` stayed after `RENAME TO c3`), so
+  explicit names are required, as the pre-spike table said.
+- Checklist: (a) referencing tables' foreign keys still enforced and named, `ON DELETE CASCADE`
+  works; (b) index names unchanged (`pg_indexes.indexdef` replayed), `sys.jobs.object_id` updated;
+  (c) identity next value unchanged, `DROP TABLE` still drops the sequence; (d) orphan and
+  violating rows are copied, enforcement is switched back (later orphan insert `23503`, CHECK
+  `23514`); (e) a failure injected after each of the 6 steps, inside and outside a client
+  transaction, leaves the table, indexes and constraints intact, the session idle (or in the
+  client's aborted block), enforcement on (`constraints::tests`); (f) a concurrent writer's COMMIT
+  gets `40001`; (g) `pg_get_constraintdef` shows the constraint, VALIDATE finds it; (h) `uuid`,
+  `jsonb`, `numeric(10,2)`, `timestamptz`, `varchar(255)`, `DEFAULT now()` and
+  `gen_random_uuid()` survive. All tests: `dsql_ddl::a_rebuild_*`, `a_failed_rebuild_*`,
+  `a_concurrent_writer_*`, `session::a_rebuild_leaves_an_idle_session_idle_*`.
+
+**Exit runs.** `scripts/drizzle-check.sh` exits `0` on a fresh server (migrations incl. the foreign
+key and its VALIDATE job, second run applies nothing, smoke including `23503`, stock migrator
+`42704`). `scripts/conformance.sh` twice against fresh servers: **187/242 (77.3%)** both times;
+`alter_add_fk_not_valid` and `alter_validate_constraint_async` pass; no regression against the
+157/242 baseline.

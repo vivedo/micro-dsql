@@ -2,7 +2,7 @@
 //! constraints the engine's SQL frontend lacks (research.md D5, D7).
 
 use micro_dsql_policy::identity::{default_sequence_name, nextval_target};
-use micro_dsql_policy::{DdlAction, NotValidKind, StatementPlan, TableRef, TxnStatus};
+use micro_dsql_policy::{DdlAction, StatementPlan, TableRef, TxnStatus};
 use pgwire::api::results::Tag;
 use pgwire::error::PgWireResult;
 use turso_pg::PgConnection;
@@ -37,24 +37,15 @@ pub(crate) fn run_ddl_statement(
             return Err(policy_error(error));
         }
     }
-    // `ADD CONSTRAINT ... CHECK ... NOT VALID` goes through the core engine's ALTER COLUMN path.
-    // A foreign key cannot (research.md §6): its statement is left to the engine's own answer.
+    // `ADD CONSTRAINT ... FOREIGN KEY / CHECK ... NOT VALID`: the table is rebuilt (D13).
     if let Some(DdlAction::AddConstraintNotValid {
         schema,
         table,
         name,
-        kind: NotValidKind::Check { column, expr_sql },
+        kind,
     }) = &plan.ddl
     {
-        constraints::add_check_not_valid(
-            conn,
-            schema.as_deref(),
-            table,
-            name,
-            column,
-            expr_sql,
-            &plan.original,
-        )?;
+        constraints::rebuild_with_constraint(conn, schema.as_deref(), table, name, kind)?;
         return Ok((Outcome::Command(Tag::new("ALTER TABLE")), 0));
     }
     // The sequences of the identity columns of the tables a DROP TABLE removes.

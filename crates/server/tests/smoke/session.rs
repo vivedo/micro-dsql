@@ -284,3 +284,39 @@ fn job_statements_complete_with_their_own_command_tags() {
     send(&mut socket, b'Q', b"SELECT job_id FROM sys.jobs\0");
     assert_eq!(read_until_ready(&mut socket), ["SELECT 4"]);
 }
+
+/// Reads up to ReadyForQuery and returns its transaction status byte.
+fn ready_status(socket: &mut TcpStream) -> u8 {
+    loop {
+        let (tag, body) = read_message(socket);
+        if tag == b'Z' {
+            return body[0];
+        }
+        assert_ne!(tag, b'E', "unexpected error");
+    }
+}
+
+/// The table rebuild behind `ADD CONSTRAINT ... NOT VALID` opens its own transaction when the
+/// session is idle; the session must be idle again when the client's statement is answered.
+#[test]
+fn a_rebuild_leaves_an_idle_session_idle_and_a_transaction_open() {
+    let server = TestServer::start();
+    let (mut socket, _) = raw_startup(&server);
+    for sql in [
+        "CREATE TABLE rbs (id int PRIMARY KEY, w int)",
+        "ALTER TABLE rbs ADD CONSTRAINT rbs_w CHECK (w > 0) NOT VALID",
+    ] {
+        send(&mut socket, b'Q', format!("{sql}\0").as_bytes());
+        assert_eq!(ready_status(&mut socket), b'I', "{sql}");
+    }
+    send(&mut socket, b'Q', b"BEGIN\0");
+    assert_eq!(ready_status(&mut socket), b'T');
+    send(
+        &mut socket,
+        b'Q',
+        b"ALTER TABLE rbs ADD CONSTRAINT rbs_w2 CHECK (w < 100) NOT VALID\0",
+    );
+    assert_eq!(ready_status(&mut socket), b'T');
+    send(&mut socket, b'Q', b"ROLLBACK\0");
+    assert_eq!(ready_status(&mut socket), b'I');
+}

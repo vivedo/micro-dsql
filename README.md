@@ -73,9 +73,9 @@ Code that would break on DSQL breaks here, with DSQL's SQLSTATE and message:
   `btree` and more than 8 key columns are refused. Identity columns must be `bigint` with an
   explicit `CACHE` of 1 or at least 65536 (`CREATE SEQUENCE` needs one too); `ADD COLUMN` with a
   default or constraint, `ALTER COLUMN TYPE`, `SET NOT NULL`, dropping a primary-key column and
-  every `ADD CONSTRAINT` other than `FOREIGN KEY`/`CHECK ... NOT VALID` are refused. See
-  [docs/known-gaps.md](docs/known-gaps.md) for what the engine cannot do (foreign keys added
-  `NOT VALID`).
+  every `ADD CONSTRAINT` other than `FOREIGN KEY`/`CHECK ... NOT VALID` are refused. A
+  `NOT VALID` constraint is added by rebuilding the table (see
+  [docs/known-gaps.md](docs/known-gaps.md) for the differences from DSQL).
 - **Jobs and `sys`**: `CREATE INDEX ASYNC` and `ALTER TABLE ASYNC ... VALIDATE CONSTRAINT` run to
   completion before they return, answer with a `job_id` row and record the job in `sys.jobs`;
   `CALL sys.wait_for_job('<id>')` returns `succeeded`, `SELECT sys.wait_for_job(...)` fails with
