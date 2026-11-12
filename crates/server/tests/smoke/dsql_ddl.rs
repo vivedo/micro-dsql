@@ -492,3 +492,329 @@ async fn dropping_a_primary_key_column_is_refused() {
         proto.ok(&c, &format!("SELECT * FROM {t}")).await;
     }
 }
+
+fn is_job_id(value: &str) -> bool {
+    value.len() == 26
+        && value
+            .bytes()
+            .all(|b| matches!(b, b'a'..=b'z' | b'2'..=b'7'))
+}
+
+/// Runs a job statement (simple protocol) and returns its job id.
+async fn job_id(c: &Client, sql: &str) -> String {
+    let id = value(c, sql).await.expect("job id");
+    assert!(is_job_id(&id), "{sql}: {id}");
+    id
+}
+
+async fn succeeded(c: &Client, id: &str) -> String {
+    value(c, &format!("CALL sys.wait_for_job('{id}')"))
+        .await
+        .expect("succeeded")
+}
+
+#[tokio::test]
+async fn check_not_valid_is_enforced_for_new_rows() {
+    let server = TestServer::start();
+    let c = server.connect().await;
+    for proto in PROTOS {
+        let t = format!("ck_{proto:?}").to_lowercase();
+        proto
+            .ok(
+                &c,
+                &format!("CREATE TABLE {t} (id int PRIMARY KEY, w int, v text)"),
+            )
+            .await;
+        proto
+            .ok(&c, &format!("INSERT INTO {t} VALUES (1, 5, 'a')"))
+            .await;
+        proto
+            .ok(
+                &c,
+                &format!("ALTER TABLE {t} ADD CONSTRAINT {t}_w CHECK (w > 0) NOT VALID"),
+            )
+            .await;
+        assert_eq!(
+            proto
+                .err(&c, &format!("INSERT INTO {t} VALUES (2, -1, 'b')"))
+                .await,
+            e(
+                "23514",
+                &format!("new row for relation \"{t}\" violates check constraint \"{t}_w\"")
+            )
+            .with_detail("Failing row contains (2, -1, b)."),
+            "{proto:?}"
+        );
+        assert_eq!(
+            proto
+                .err(&c, &format!("UPDATE {t} SET w = 0 WHERE id = 1"))
+                .await
+                .code,
+            "23514",
+            "{proto:?}"
+        );
+        proto
+            .ok(&c, &format!("INSERT INTO {t} VALUES (3, 7, 'c')"))
+            .await;
+        // The data, the primary key and the other columns survived the ALTER.
+        assert_eq!(
+            value(&c, &format!("SELECT count(*) FROM {t}")).await,
+            s("2"),
+            "{proto:?}"
+        );
+        assert_eq!(
+            proto
+                .err(&c, &format!("INSERT INTO {t} VALUES (3, 8, 'dup')"))
+                .await
+                .code,
+            "23505"
+        );
+        // Unnamed: the name PostgreSQL would give.
+        proto
+            .ok(
+                &c,
+                &format!("ALTER TABLE {t} ADD CHECK (w < 1000) NOT VALID"),
+            )
+            .await;
+        assert_eq!(
+            proto
+                .err(&c, &format!("INSERT INTO {t} VALUES (5, 5000, 'x')"))
+                .await
+                .message,
+            format!("new row for relation \"{t}\" violates check constraint \"{t}_w_check\""),
+            "{proto:?}"
+        );
+    }
+}
+
+/// US3 scenario 2: a CHECK added NOT VALID does not look at existing rows. The core engine
+/// validates them when it adds a CHECK (research.md §6), so this fails until the owner decides
+/// T033.
+#[tokio::test]
+async fn check_not_valid_does_not_check_existing_rows() {
+    let server = TestServer::start();
+    let c = server.connect().await;
+    for proto in PROTOS {
+        let t = format!("cke_{proto:?}").to_lowercase();
+        proto
+            .ok(&c, &format!("CREATE TABLE {t} (id int PRIMARY KEY, w int)"))
+            .await;
+        proto
+            .ok(&c, &format!("INSERT INTO {t} VALUES (1, -5)"))
+            .await;
+        proto
+            .ok(
+                &c,
+                &format!("ALTER TABLE {t} ADD CONSTRAINT {t}_w CHECK (w > 0) NOT VALID"),
+            )
+            .await;
+        assert_eq!(
+            proto
+                .err(&c, &format!("INSERT INTO {t} VALUES (2, -1)"))
+                .await
+                .code,
+            "23514"
+        );
+        // The old row is still there, and VALIDATE finds it.
+        let id = job_id(
+            &c,
+            &format!("ALTER TABLE ASYNC {t} VALIDATE CONSTRAINT {t}_w"),
+        )
+        .await;
+        assert_eq!(succeeded(&c, &id).await, "f", "{proto:?}");
+    }
+}
+
+/// US3 scenarios 1: a foreign key added NOT VALID is enforced for new rows and not checked for
+/// existing ones. Blocked on T033: the core engine's ALTER COLUMN path does not add the foreign
+/// key (research.md §6).
+#[tokio::test]
+async fn fk_not_valid_is_enforced_for_new_rows_only() {
+    let server = TestServer::start();
+    let c = server.connect().await;
+    for proto in PROTOS {
+        let p = format!("fkp_{proto:?}").to_lowercase();
+        let t = format!("fkc_{proto:?}").to_lowercase();
+        proto
+            .ok(&c, &format!("CREATE TABLE {p} (id bigint PRIMARY KEY)"))
+            .await;
+        proto
+            .ok(
+                &c,
+                &format!("CREATE TABLE {t} (id int PRIMARY KEY, parent bigint)"),
+            )
+            .await;
+        proto.ok(&c, &format!("INSERT INTO {p} VALUES (1)")).await;
+        proto
+            .ok(&c, &format!("INSERT INTO {t} VALUES (1, 99)"))
+            .await;
+        proto
+            .ok(
+                &c,
+                &format!(
+                    "ALTER TABLE {t} ADD CONSTRAINT {t}_fk FOREIGN KEY (parent) REFERENCES {p} (id) \
+                     ON DELETE CASCADE NOT VALID"
+                ),
+            )
+            .await;
+        let err = proto
+            .err(&c, &format!("INSERT INTO {t} VALUES (2, 98)"))
+            .await;
+        assert_eq!(err.code, "23503", "{proto:?}");
+        assert_eq!(
+            err.message,
+            format!("insert or update on table \"{t}\" violates foreign key constraint \"{t}_fk\"")
+        );
+        proto
+            .ok(&c, &format!("INSERT INTO {t} VALUES (3, 1)"))
+            .await;
+        proto.ok(&c, &format!("DELETE FROM {p} WHERE id = 1")).await;
+        assert_eq!(
+            value(&c, &format!("SELECT count(*) FROM {t} WHERE parent = 1")).await,
+            s("0"),
+            "ON DELETE CASCADE"
+        );
+        // VALIDATE: the old orphan fails the job.
+        let id = job_id(
+            &c,
+            &format!("ALTER TABLE ASYNC {t} VALIDATE CONSTRAINT {t}_fk"),
+        )
+        .await;
+        assert_eq!(succeeded(&c, &id).await, "f", "{proto:?}");
+        let row = rows(
+            &c,
+            &format!("SELECT status, job_type, object_name FROM sys.jobs WHERE job_id = '{id}'"),
+        )
+        .await;
+        assert_eq!(
+            row,
+            vec![vec![
+                s("failed"),
+                s("VALIDATE_CONSTRAINT"),
+                Some(format!("public.{t}"))
+            ]]
+        );
+        proto
+            .ok(&c, &format!("DELETE FROM {t} WHERE parent = 99"))
+            .await;
+        let id = job_id(
+            &c,
+            &format!("ALTER TABLE ASYNC {t} VALIDATE CONSTRAINT {t}_fk"),
+        )
+        .await;
+        assert_eq!(succeeded(&c, &id).await, "t", "{proto:?}");
+    }
+}
+
+#[tokio::test]
+async fn validate_constraint_jobs() {
+    let server = TestServer::start();
+    let c = server.connect().await;
+    c.simple_query("CREATE TABLE vc (id int PRIMARY KEY, w int)")
+        .await
+        .unwrap();
+    c.simple_query("INSERT INTO vc VALUES (1, 5)")
+        .await
+        .unwrap();
+    c.simple_query("ALTER TABLE vc ADD CONSTRAINT vc_w CHECK (w > 0) NOT VALID")
+        .await
+        .unwrap();
+    let id = job_id(&c, "ALTER TABLE ASYNC vc VALIDATE CONSTRAINT vc_w").await;
+    assert_eq!(succeeded(&c, &id).await, "t");
+    assert_eq!(
+        rows(
+            &c,
+            &format!(
+                "SELECT status, job_type, object_name, details FROM sys.jobs WHERE job_id = '{id}'"
+            )
+        )
+        .await,
+        vec![vec![
+            s("completed"),
+            s("VALIDATE_CONSTRAINT"),
+            s("public.vc"),
+            None
+        ]]
+    );
+    // A constraint that does not exist on the table.
+    for proto in PROTOS {
+        assert_eq!(
+            proto
+                .err(&c, "ALTER TABLE ASYNC vc VALIDATE CONSTRAINT nope")
+                .await,
+            e(
+                "42704",
+                "constraint \"nope\" of relation \"vc\" does not exist"
+            ),
+            "{proto:?}"
+        );
+    }
+    // Inside a transaction the ALTER is the one DDL.
+    c.simple_query("BEGIN").await.unwrap();
+    job_id(&c, "ALTER TABLE ASYNC vc VALIDATE CONSTRAINT vc_w").await;
+    assert_eq!(
+        crate::common::simple_err(&c, "CREATE TABLE vc2 (id int)").await,
+        e(
+            "0A000",
+            "multiple ddl statements not supported in a transaction"
+        )
+    );
+    c.simple_query("ROLLBACK").await.unwrap();
+}
+
+#[tokio::test]
+async fn other_constraint_forms_are_refused() {
+    let server = TestServer::start();
+    let c = server.connect().await;
+    for proto in PROTOS {
+        let t = format!("oc_{proto:?}").to_lowercase();
+        proto
+            .ok(
+                &c,
+                &format!("CREATE TABLE {t} (id int PRIMARY KEY, a int, b int)"),
+            )
+            .await;
+        for sql in [
+            format!("ALTER TABLE {t} ADD CONSTRAINT x FOREIGN KEY (a) REFERENCES {t} (id)"),
+            format!("ALTER TABLE {t} ADD CONSTRAINT x CHECK (a > 0)"),
+            format!("ALTER TABLE {t} ADD CONSTRAINT x UNIQUE (a)"),
+            format!("ALTER TABLE {t} ADD PRIMARY KEY (a)"),
+        ] {
+            assert_eq!(
+                proto.err(&c, &sql).await,
+                e("0A000", "unsupported ALTER TABLE ADD CONSTRAINT statement"),
+                "{proto:?}: {sql}"
+            );
+        }
+        assert_eq!(
+            proto
+                .err(&c, &format!("ALTER TABLE {t} VALIDATE CONSTRAINT x"))
+                .await,
+            e(
+                "0A000",
+                "unsupported ALTER TABLE VALIDATE CONSTRAINT statement"
+            ),
+            "{proto:?}"
+        );
+        for (sql, form) in [
+            (
+                format!("ALTER TABLE {t} ADD CONSTRAINT x FOREIGN KEY (a, b) REFERENCES {t} (id, a) NOT VALID"),
+                "multi-column foreign key",
+            ),
+            (
+                format!("ALTER TABLE {t} ADD CONSTRAINT x FOREIGN KEY (a) REFERENCES {t} (id) DEFERRABLE NOT VALID"),
+                "deferrable foreign key",
+            ),
+            (
+                format!("ALTER TABLE {t} ADD CONSTRAINT x CHECK (a > b) NOT VALID"),
+                "multi-column check",
+            ),
+        ] {
+            assert_eq!(
+                proto.err(&c, &sql).await,
+                e("0A000", &format!("unsupported NOT VALID constraint form: {form}")),
+                "{proto:?}: {sql}"
+            );
+        }
+    }
+}

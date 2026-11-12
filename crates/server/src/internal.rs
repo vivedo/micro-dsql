@@ -2,7 +2,7 @@
 //! lookups, job rows, sequences): straight to the engine, never through the policy, so they
 //! are not counted by the discipline rules and not subject to the DSQL deny rules.
 
-use pgwire::error::PgWireResult;
+use pgwire::error::{PgWireError, PgWireResult};
 use turso_core::Value;
 use turso_pg::PgConnection;
 
@@ -41,4 +41,11 @@ pub(crate) fn literal(text: &str) -> String {
 /// An identifier, quoted.
 pub(crate) fn ident(name: &str) -> String {
     format!("\"{}\"", name.replace('"', "\"\""))
+}
+
+/// A server-raised error with its own SQLSTATE; like an engine error it aborts an open
+/// transaction block.
+pub(crate) fn user_error(conn: &PgConnection, sqlstate: &str, message: &str) -> PgWireError {
+    conn.abort_transaction_block_on_error();
+    PgWireError::UserError(Box::new(crate::error_info_code(sqlstate, message)))
 }

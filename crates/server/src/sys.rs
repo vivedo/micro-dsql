@@ -10,6 +10,7 @@ use pgwire::error::{PgWireError, PgWireResult};
 use turso_core::{ConnectOpts, Database};
 use turso_pg::PgConnection;
 
+use crate::constraints;
 use crate::dsql::{policy_error, txn_status};
 use crate::internal::{exec, ident, literal, query};
 use crate::{reply_rows, Outcome};
@@ -204,7 +205,16 @@ pub(crate) fn run_job_statement(
             reply_rows("CALL", &columns, &[vec![Some(value.to_owned())]], format)
                 .map(|outcome| (outcome, 0))
         }
-        // Jobs of other kinds arrive with their statements; until then the engine decides.
+        Some(JobAction::Validate {
+            schema,
+            table,
+            constraint,
+        }) => {
+            let job = constraints::validate(conn, schema.as_deref(), table, constraint)?;
+            let id = record_job(conn, SystemTime::now(), random_bits(), &job)?;
+            job_rows("ALTER TABLE", id, format)
+        }
+        // `MajorVersion` is answered by the policy and never reaches the server.
         _ => run_engine(&plan.engine_sql),
     }
 }
