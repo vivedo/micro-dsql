@@ -84,6 +84,10 @@ The probes record MiniStack's behaviour. Where MiniStack is known to differ from
 | `21_column_types` | bare `numeric` stays `numeric` | `numeric(18,6)` |
 | `03_temp_table` | `CREATE TEMP VIEW` accepted | no temporary views |
 | `06`/`07`/`24` | discipline errors use `25006` | SQLSTATE unverified (probably `0A000`) |
+| `01`–`03`, `08`, `20`, `21`, `29` | deny-rule texts such as `TRUNCATE is not supported`, `type "money" is not supported` | live-DSQL texts: `unsupported statement: Truncate`, `datatype money not supported`, ... (micro-dsql follows these) |
+| `09_serial_column` | `0A000 type "serial" is not supported` | `42704 type "serial" does not exist` |
+| `10`, `23` | `SET lock_timeout`, `RESET default_statistics_target` accepted | refused: only DSQL's whitelist can be set |
+| `20_denylist` | `pg_advisory_lock` and `CREATE DOMAIN` behave as PostgreSQL (domain refused, advisory locks run) | domains are supported; advisory locks are refused by micro-dsql |
 
 MiniStack also closes the connection (instead of returning a FATAL error) when the database
 name is not `postgres`.

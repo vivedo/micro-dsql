@@ -21,5 +21,6 @@ turso_pg_parser.workspace = true
 micro-dsql-policy.workspace = true
 
 [dev-dependencies]
+tracing-subscriber.workspace = true
 tokio-postgres.workspace = true
 uuid.workspace = true

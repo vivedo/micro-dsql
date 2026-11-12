@@ -46,8 +46,6 @@ pub const SHOW_PARAMETERS: &[(&str, &str)] = &[
     ("in_hot_standby", "off"),
     ("transaction_isolation", ISOLATION_LEVEL),
     ("default_transaction_isolation", ISOLATION_LEVEL),
-    ("lc_collate", "C"),
-    ("lc_ctype", "C"),
 ];
 
 /// The `(column name, value)` for `SHOW <name>`, if the server answers it itself.
@@ -108,6 +106,9 @@ mod tests {
             "server_version"
         );
         assert_eq!(show_parameter("search_path"), None);
+        // DSQL has no such parameters: SHOW fails with 42704 (see `settings`).
+        assert_eq!(show_parameter("lc_collate"), None);
+        assert_eq!(show_parameter("lc_ctype"), None);
     }
 
     #[test]

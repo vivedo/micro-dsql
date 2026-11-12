@@ -4,7 +4,7 @@ use std::net::SocketAddr;
 use std::sync::mpsc;
 use std::thread::JoinHandle;
 
-use micro_dsql_server::{Server, Storage};
+use micro_dsql_server::{Server, ServerOptions, Storage};
 use tokio::sync::oneshot;
 use tokio_postgres::{Client, NoTls};
 
@@ -17,6 +17,10 @@ pub struct TestServer {
 
 impl TestServer {
     pub fn start() -> Self {
+        Self::start_with(ServerOptions::default())
+    }
+
+    pub fn start_with(options: ServerOptions) -> Self {
         let (addr_tx, addr_rx) = mpsc::channel();
         let (shutdown_tx, shutdown_rx) = oneshot::channel::<()>();
         let thread = std::thread::spawn(move || {
@@ -26,7 +30,7 @@ impl TestServer {
                 .build()
                 .expect("runtime");
             runtime.block_on(async move {
-                let server = Server::bind("127.0.0.1:0", &Storage::Memory)
+                let server = Server::bind_with("127.0.0.1:0", &Storage::Memory, options)
                     .await
                     .expect("bind");
                 addr_tx.send(server.local_addr().expect("addr")).unwrap();
@@ -128,4 +132,46 @@ pub async fn sqlstate(client: &Client, sql: &str) -> String {
 
 pub fn s(v: &str) -> Option<String> {
     Some(v.to_owned())
+}
+
+/// The fields of a server error that the DSQL rules define.
+#[derive(Debug, PartialEq, Eq)]
+pub struct DbErr {
+    pub code: String,
+    pub message: String,
+    pub detail: Option<String>,
+}
+
+impl DbErr {
+    pub fn new(code: &str, message: &str) -> Self {
+        Self {
+            code: code.to_owned(),
+            message: message.to_owned(),
+            detail: None,
+        }
+    }
+
+    pub fn with_detail(mut self, detail: &str) -> Self {
+        self.detail = Some(detail.to_owned());
+        self
+    }
+
+    pub fn of(error: &tokio_postgres::Error) -> Self {
+        let db = error
+            .as_db_error()
+            .unwrap_or_else(|| panic!("not a server error: {error:?}"));
+        Self {
+            code: db.code().code().to_owned(),
+            message: db.message().to_owned(),
+            detail: db.detail().map(str::to_owned),
+        }
+    }
+}
+
+/// The error of a failing simple-protocol statement.
+pub async fn simple_err(client: &Client, sql: &str) -> DbErr {
+    match client.simple_query(sql).await {
+        Ok(_) => panic!("{sql}: expected an error"),
+        Err(e) => DbErr::of(&e),
+    }
 }

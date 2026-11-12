@@ -3,6 +3,9 @@
 
 mod common;
 mod crud;
+mod dsql_conflicts;
+mod dsql_rules;
+mod dsql_settings;
 mod errors;
 mod extended;
 mod session;
