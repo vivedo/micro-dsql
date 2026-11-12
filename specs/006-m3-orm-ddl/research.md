@@ -383,3 +383,23 @@ what the path supports: `CHECK ... NOT VALID` (fails with the engine's check err
 existing row violates it), `ALTER TABLE ASYNC ... VALIDATE CONSTRAINT` for CHECK constraints, and
 leaves `FOREIGN KEY ... NOT VALID` to the engine's own answer (`42601 ALTER TABLE ADD CONSTRAINT
 is not supported`) until the owner decides.
+
+## 7. Exit runs (implementation, 2026-11-12)
+
+**Golden probes (T056).** `scripts/conformance.sh` against a fresh in-memory server, pinned
+commit `38a33bf`: before M3 (build of `95842a0`) **157/242 (64.9%)**, run once; after M3 **185/242
+(76.4%)**, run twice against fresh servers with identical totals. 28 cases fixed, no regression
+(the failing set after is a subset of the one before). Of the 30 cases of section 3 "M3 scope", 28
+pass; `alter_add_fk_not_valid` and `alter_validate_constraint_async` fail because of the D7 spike
+result (section 6). The command tag of the job statements had to be sent without a row count
+(`CREATE INDEX`, not `CREATE INDEX 1`) for 8 of the index cases to pass.
+
+**Drizzle (T052).** `scripts/drizzle-check.sh` against a fresh server exits `1`: the migrations
+apply up to the foreign key (`CREATE TABLE` x3 succeed, then `ALTER TABLE "posts" ADD CONSTRAINT
+... FOREIGN KEY ... NOT VALID` fails with `42601 ALTER TABLE ADD CONSTRAINT is not supported`, see
+section 6) and the stock migrator fails with `42704 type "serial" does not exist` as specified.
+With the foreign-key statements removed from a copy of the migrations (`MIGRATIONS_FOLDER`), the
+rest runs: all 7 remaining statements succeed (identity tables, two `ASYNC` indexes with waited
+jobs, `ADD COLUMN`, a second `ASYNC` index), the second run applies nothing, and the smoke passes
+every step (identity values 1 and 2, uuid/numeric/jsonb round trip, join, update, generated
+always identity, transaction commit and rollback) except the `23503` foreign-key assertion.

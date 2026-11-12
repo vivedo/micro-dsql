@@ -818,3 +818,64 @@ async fn other_constraint_forms_are_refused() {
         }
     }
 }
+
+#[tokio::test]
+async fn index_rules_refuse_what_dsql_refuses() {
+    let server = TestServer::start();
+    let c = server.connect().await;
+    for proto in PROTOS {
+        let t = format!("ir_{proto:?}").to_lowercase();
+        proto
+            .ok(
+                &c,
+                &format!(
+                    "CREATE TABLE {t} (id int PRIMARY KEY, c1 int, c2 int, c3 int, c4 int, c5 int, \
+                     c6 int, c7 int, c8 int, c9 int)"
+                ),
+            )
+            .await;
+        assert_eq!(
+            proto
+                .err(&c, &format!("CREATE INDEX CONCURRENTLY {t}_i ON {t} (c1)"))
+                .await,
+            e("0A000", "CONCURRENTLY not supported for CREATE INDEX"),
+            "{proto:?}"
+        );
+        assert_eq!(
+            proto
+                .err(&c, &format!("CREATE INDEX {t}_i ON {t} (c1)"))
+                .await,
+            e("0A000", "unsupported mode. please use CREATE INDEX ASYNC."),
+            "{proto:?}"
+        );
+        for method in ["hash", "gin", "gist"] {
+            assert_eq!(
+                proto
+                    .err(
+                        &c,
+                        &format!("CREATE INDEX ASYNC {t}_{method} ON {t} USING {method} (c1)")
+                    )
+                    .await,
+                e("0A000", "USING not supported for CREATE INDEX"),
+                "{proto:?} {method}"
+            );
+        }
+        assert_eq!(
+            proto
+                .err(
+                    &c,
+                    &format!(
+                        "CREATE INDEX ASYNC {t}_nine ON {t} (c1, c2, c3, c4, c5, c6, c7, c8, c9)"
+                    )
+                )
+                .await,
+            e(
+                "54011",
+                "more than 8 column keys in an index are not supported"
+            ),
+            "{proto:?}"
+        );
+        // Eight keys and `USING btree` are fine; nothing was recorded for the refusals.
+        assert_eq!(value(&c, "SELECT count(*) FROM sys.jobs WHERE object_name LIKE '%_nine' OR object_name LIKE '%_hash'").await, s("0"));
+    }
+}
