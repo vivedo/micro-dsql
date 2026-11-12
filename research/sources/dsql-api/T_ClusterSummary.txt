@@ -1,0 +1,18 @@
+ClusterSummary
+A summary of the properties of a cluster.
+      Contents
+                  arn
+               The ARN of the cluster.
+               Type: String
+               Pattern: arn:aws(-[^:]+)?:dsql:[a-z0-9-]{1,20}:[0-9]{12}:cluster/[a-z0-9]{26}
+               Required: Yes
+                  identifier
+               The ID of the cluster.
+               Type: String
+               Pattern: [a-z0-9]{26}
+               Required: Yes
+      See Also
+      For more information about using this API in one of the language-specific AWS SDKs, see the following:
+               AWS SDK for C++
+               AWS SDK for Java V2
+               AWS SDK for Ruby V3

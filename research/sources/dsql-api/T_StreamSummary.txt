@@ -1,0 +1,32 @@
+StreamSummary
+Summary information about a stream.
+      Contents
+                  arn
+               The ARN of the stream.
+               Type: String
+               Pattern: arn:aws(-[^:]+)?:dsql:[a-z0-9-]{1,20}:[0-9]{12}:cluster/[a-z0-9]{26}/stream/[a-z0-9]{26}
+               Required: Yes
+                  clusterIdentifier
+               The ID of the cluster.
+               Type: String
+               Pattern: [a-z0-9]{26}
+               Required: Yes
+                  creationTime
+               The timestamp when the stream was created.
+               Type: Timestamp
+               Required: Yes
+                  status
+               The current status of the stream.
+               Type: String
+               Valid Values: CREATING | ACTIVE | DELETING | DELETED | FAILED | IMPAIRED
+               Required: Yes
+                  streamIdentifier
+               The ID of the stream.
+               Type: String
+               Pattern: [a-z0-9]{26}
+               Required: Yes
+      See Also
+      For more information about using this API in one of the language-specific AWS SDKs, see the following:
+               AWS SDK for C++
+               AWS SDK for Java V2
+               AWS SDK for Ruby V3

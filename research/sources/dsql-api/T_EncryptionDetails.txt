@@ -1,0 +1,22 @@
+EncryptionDetails
+Configuration details about encryption for the cluster including the AWS KMS key ARN, encryption type, and encryption status.
+      Contents
+                  encryptionStatus
+               The status of encryption for the cluster.
+               Type: String
+               Valid Values: ENABLED | UPDATING | KMS_KEY_INACCESSIBLE | ENABLING
+               Required: Yes
+                  encryptionType
+               The type of encryption that protects the data on your cluster.
+               Type: String
+               Valid Values: AWS_OWNED_KMS_KEY | CUSTOMER_MANAGED_KMS_KEY
+               Required: Yes
+                  kmsKeyArn
+               The ARN of the AWS KMS key that encrypts data in the cluster.
+               Type: String
+               Required: No
+      See Also
+      For more information about using this API in one of the language-specific AWS SDKs, see the following:
+               AWS SDK for C++
+               AWS SDK for Java V2
+               AWS SDK for Ruby V3

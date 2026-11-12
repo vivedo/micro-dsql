@@ -1,0 +1,18 @@
+Actions
+The following actions are supported:
+            CreateCluster
+            CreateStream
+            DeleteCluster
+            DeleteClusterPolicy
+            DeleteStream
+            GetCluster
+            GetClusterPolicy
+            GetStream
+            GetVpcEndpointServiceName
+            ListClusters
+            ListStreams
+            ListTagsForResource
+            PutClusterPolicy
+            TagResource
+            UntagResource
+            UpdateCluster

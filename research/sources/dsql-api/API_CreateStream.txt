@@ -1,0 +1,181 @@
+CreateStream
+Creates a new change data capture (CDC) stream for a  cluster. The stream captures
+         database changes and delivers them to the specified target destination.
+      Required permissions
+         dsql:CreateStream
+            Permission to create a new stream.
+            Resources: arn:aws:dsql:region:account-id:cluster/cluster-id
+         iam:PassRole
+            Permission to pass the IAM role specified in the target definition to the  service.
+            Resources: ARN of the IAM role specified in targetDefinition.kinesis.roleArn
+         kms:Decrypt
+            Required when the cluster uses a customer managed AWS KMS key (CMK). Permission to decrypt data using the cluster's CMK.
+            Resources: ARN of the AWS KMS key used by the cluster
+      Request Syntax
+POST /stream/clusterIdentifier HTTP/1.1
+Content-type: application/json
+{
+   "clientToken": "string",
+   "format": "string",
+   "ordering": "string",
+   "tags": { 
+      "string" : "string" 
+   },
+   "targetDefinition": { ... }
+}
+      URI Request Parameters
+      The request uses the following URI parameters.
+                  clusterIdentifier
+               The ID of the cluster for which to create the stream.
+               Pattern: [a-z0-9]{26}
+               Required: Yes
+      Request Body
+      The request accepts the following data in JSON format.
+                  clientToken
+               A unique, case-sensitive identifier that you provide to ensure the idempotency of the
+         request. Idempotency ensures that an API request completes only once. With an idempotent
+         request, if the original request completes successfully, the subsequent retries with the
+         same client token return the result from the original successful request and they have no
+         additional effect.
+               If you don't specify a client token, the AWS SDK automatically generates
+         one.
+               Type: String
+               Length Constraints: Minimum length of 1. Maximum length of 128.
+               Pattern: [!-~]+
+               Required: No
+                  format
+               The format of the stream records.
+               Type: String
+               Valid Values: JSON
+               Required: Yes
+                  ordering
+               The ordering mode for the stream. Determines how change events are ordered when delivered
+         to the target.
+               Type: String
+               Valid Values: UNORDERED
+               Required: Yes
+                  tags
+               A map of key and value pairs to use to tag your stream.
+               Type: String to string map
+               Map Entries: Minimum number of 0 items. Maximum number of 200 items.
+               Key Length Constraints: Minimum length of 1. Maximum length of 128.
+               Key Pattern: [a-zA-Z0-9_.:/=+\-@ ]*
+               Value Length Constraints: Minimum length of 0. Maximum length of 256.
+               Value Pattern: [a-zA-Z0-9_.:/=+\-@ ]*
+               Required: No
+                  targetDefinition
+               The target destination configuration for the stream. Contains Kinesis stream configuration
+         including stream ARN and IAM role ARN.
+               Type: TargetDefinition object
+                  Note: This object is a Union. Only one member of this object can be specified or returned.
+               Required: Yes
+      Response Syntax
+HTTP/1.1 200
+Content-type: application/json
+{
+   "arn": "string",
+   "clusterIdentifier": "string",
+   "creationTime": number,
+   "format": "string",
+   "ordering": "string",
+   "status": "string",
+   "streamIdentifier": "string"
+}
+      Response Elements
+      If the action is successful, the service sends back an HTTP 200 response.
+      The following data is returned in JSON format by the service.
+                  arn
+               The ARN of the created stream.
+               Type: String
+               Pattern: arn:aws(-[^:]+)?:dsql:[a-z0-9-]{1,20}:[0-9]{12}:cluster/[a-z0-9]{26}/stream/[a-z0-9]{26}
+                  clusterIdentifier
+               The ID of the cluster for the created stream.
+               Type: String
+               Pattern: [a-z0-9]{26}
+                  creationTime
+               The time when  created the stream.
+               Type: Timestamp
+                  format
+               The format of the created stream records.
+               Type: String
+               Valid Values: JSON
+                  ordering
+               The ordering mode of the created stream.
+               Type: String
+               Valid Values: UNORDERED
+                  status
+               The status of the created stream.
+               Type: String
+               Valid Values: CREATING | ACTIVE | DELETING | DELETED | FAILED | IMPAIRED
+                  streamIdentifier
+               The ID of the created stream.
+               Type: String
+               Pattern: [a-z0-9]{26}
+      Errors
+      For information about the errors that are common to all actions, see Common Error Types.
+                  AccessDeniedException
+               You do not have sufficient access to perform this action.
+               HTTP Status Code: 403
+                  ConflictException
+               The submitted action has conflicts.
+                           resourceId
+                        Resource Id
+                           resourceType
+                        Resource Type
+               HTTP Status Code: 409
+                  InternalServerException
+               The request processing has failed because of an unknown error, exception or
+         failure.
+                           retryAfterSeconds
+                        Retry after seconds.
+               HTTP Status Code: 500
+                  ResourceNotFoundException
+               The resource could not be found.
+                           resourceId
+                        The resource ID could not be found.
+                           resourceType
+                        The resource type could not be found.
+               HTTP Status Code: 404
+                  ServiceQuotaExceededException
+               The service limit was exceeded.
+                           message
+                        The service exception for exceeding a quota.
+                           quotaCode
+                        The service exceeds a quota.
+                           resourceId
+                        The resource ID exceeds a quota.
+                           resourceType
+                        The resource type exceeds a quota.
+                           serviceCode
+                        The request exceeds a service quota.
+               HTTP Status Code: 402
+                  ThrottlingException
+               The request was denied due to request throttling.
+                           message
+                        The message that the request was denied due to request throttling.
+                           quotaCode
+                        The request exceeds a request rate quota.
+                           retryAfterSeconds
+                        The request exceeds a request rate quota. Retry after seconds.
+                           serviceCode
+                        The request exceeds a service quota.
+               HTTP Status Code: 429
+                  ValidationException
+               The input failed to satisfy the constraints specified by an AWS service.
+                           fieldList
+                        A list of fields that didn't validate.
+                           reason
+                        The reason for the validation exception.
+               HTTP Status Code: 400
+      See Also
+      For more information about using this API in one of the language-specific AWS SDKs, see the following:
+               AWS Command Line Interface V2
+               AWS SDK for .NET V4
+               AWS SDK for C++
+               AWS SDK for Go v2
+               AWS SDK for Java V2
+               AWS SDK for JavaScript V3
+               AWS SDK for Kotlin
+               AWS SDK for PHP V3
+               AWS SDK for Python (Boto3)
+               AWS SDK for Ruby V3
