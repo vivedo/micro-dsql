@@ -1,0 +1,9 @@
+[package]
+name = "micro-dsql-policy"
+description = "DSQL rules on the pg_query AST (backend-agnostic: no engine types)"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+[dependencies]
+pg_query.workspace = true

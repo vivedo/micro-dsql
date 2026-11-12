@@ -1,0 +1,28 @@
+[package]
+name = "micro-dsql-server"
+description = "Postgres wire server for micro-dsql, adapted from Turso's turso_pg_server"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+# src/lib.rs is derived from MIT-licensed upstream code; see its header and LICENSES/turso-MIT.txt.
+license = "MIT"
+
+[dependencies]
+anyhow.workspace = true
+async-trait.workspace = true
+bytes.workspace = true
+futures.workspace = true
+pgwire.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+turso_core.workspace = true
+turso_pg.workspace = true
+turso_pg_parser.workspace = true
+micro-dsql-policy.workspace = true
+
+[dev-dependencies]
+tokio-postgres.workspace = true
+
+[[test]]
+name = "smoke"
+path = "../../tests/smoke/main.rs"

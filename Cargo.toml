@@ -1,0 +1,30 @@
+[workspace]
+resolver = "2"
+members = ["crates/policy", "crates/server", "bin/micro-dsql"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[workspace.dependencies]
+# Turso crates: one pinned commit for all of them (constitution Principle II).
+# Bump deliberately, together, with the full gate set.
+turso_core = { git = "https://github.com/tursodatabase/turso", rev = "d5fdf4d876ad7eb68e9cbef9a88e6b65c56b19f5", features = ["conn_raw_api"] }
+turso_pg = { git = "https://github.com/tursodatabase/turso", rev = "d5fdf4d876ad7eb68e9cbef9a88e6b65c56b19f5" }
+turso_pg_parser = { git = "https://github.com/tursodatabase/turso", rev = "d5fdf4d876ad7eb68e9cbef9a88e6b65c56b19f5" }
+
+pgwire = "0.36"
+pg_query = "6.1"
+async-trait = "0.1"
+bytes = "1"
+futures = "0.3"
+tokio = { version = "1", features = ["rt-multi-thread", "net", "io-util", "macros", "signal", "sync", "time"] }
+tracing = "0.1.41"
+tracing-subscriber = { version = "0.3.20", features = ["env-filter", "fmt"] }
+anyhow = "1"
+clap = { version = "4.5.47", features = ["derive"] }
+tokio-postgres = "0.7"
+
+micro-dsql-policy = { path = "crates/policy" }
+micro-dsql-server = { path = "crates/server" }
