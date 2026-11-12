@@ -2,7 +2,7 @@
 //! sequences, `ALTER TABLE` forms and the `sys` schema. Stateless, on the AST and the
 //! pre-parse result; evaluated after 005's rules, first match wins.
 
-use pg_query::protobuf::{Node, RangeVar, Token};
+use pg_query::protobuf::{AlterTableType, ConstrType, Constraint, Node, RangeVar, Token};
 use pg_query::NodeEnum;
 
 use crate::errors::{self, PolicyError};
@@ -106,6 +106,63 @@ pub const RULES: &[DdlRule] = &[
         },
     },
     DdlRule {
+        id: "add_column_constraint",
+        check: |node, _, _| {
+            alter_cmds(node)
+                .filter(|cmd| cmd.subtype == AlterTableType::AtAddColumn as i32)
+                .filter_map(|cmd| match cmd.def.as_ref()?.node.as_ref()? {
+                    NodeEnum::ColumnDef(column) => Some(&**column),
+                    _ => None,
+                })
+                .any(|column| !column.constraints.is_empty() || column.raw_default.is_some())
+                .then(errors::add_column_constraint)
+        },
+    },
+    DdlRule {
+        id: "alter_column_type",
+        check: |node, _, _| {
+            alter_cmds(node)
+                .any(|cmd| cmd.subtype == AlterTableType::AtAlterColumnType as i32)
+                .then(errors::alter_column_type)
+        },
+    },
+    DdlRule {
+        id: "set_not_null",
+        check: |node, _, _| {
+            alter_cmds(node)
+                .any(|cmd| cmd.subtype == AlterTableType::AtSetNotNull as i32)
+                .then(errors::set_not_null)
+        },
+    },
+    DdlRule {
+        id: "add_constraint",
+        check: |node, _, _| {
+            alter_cmds(node)
+                .filter(|cmd| cmd.subtype == AlterTableType::AtAddConstraint as i32)
+                .filter_map(|cmd| constraint(cmd))
+                .any(|c| !is_not_valid_fk_or_check(c))
+                .then(errors::add_constraint)
+        },
+    },
+    DdlRule {
+        id: "add_constraint_form",
+        check: |node, _, _| {
+            alter_cmds(node)
+                .filter(|cmd| cmd.subtype == AlterTableType::AtAddConstraint as i32)
+                .filter_map(|cmd| constraint(cmd))
+                .find_map(|c| not_valid_form(c).map(errors::add_constraint_form))
+        },
+    },
+    DdlRule {
+        id: "validate_sync",
+        check: |node, _, ctx| {
+            (ctx.async_kind != Some(AsyncKind::AlterTable)
+                && alter_cmds(node)
+                    .any(|cmd| cmd.subtype == AlterTableType::AtValidateConstraint as i32))
+            .then(errors::validate_sync)
+        },
+    },
+    DdlRule {
         id: "wait_for_job_select",
         check: |node, sql, _| {
             (!matches!(node, NodeEnum::CallStmt(_)) && has_sys_call(sql, "wait_for_job"))
@@ -172,6 +229,79 @@ fn identity_columns(
             }
             _ => None,
         })
+}
+
+/// The commands of an `ALTER TABLE`.
+pub(crate) fn alter_cmds(
+    node: &NodeEnum,
+) -> impl Iterator<Item = &pg_query::protobuf::AlterTableCmd> {
+    let cmds: &[Node] = match node {
+        NodeEnum::AlterTableStmt(alter) => &alter.cmds,
+        _ => &[],
+    };
+    cmds.iter().filter_map(|n| match n.node.as_ref()? {
+        NodeEnum::AlterTableCmd(cmd) => Some(&**cmd),
+        _ => None,
+    })
+}
+
+/// The constraint of an `ADD CONSTRAINT` command.
+pub(crate) fn constraint(cmd: &pg_query::protobuf::AlterTableCmd) -> Option<&Constraint> {
+    match cmd.def.as_ref()?.node.as_ref()? {
+        NodeEnum::Constraint(c) => Some(&**c),
+        _ => None,
+    }
+}
+
+/// A foreign key or CHECK declared `NOT VALID`: the only `ADD CONSTRAINT` DSQL has.
+fn is_not_valid_fk_or_check(c: &Constraint) -> bool {
+    c.skip_validation
+        && (c.contype == ConstrType::ConstrForeign as i32
+            || c.contype == ConstrType::ConstrCheck as i32)
+}
+
+/// The columns a CHECK expression names.
+pub(crate) fn check_columns(c: &Constraint) -> Vec<String> {
+    let mut columns: Vec<String> = Vec::new();
+    if let Some(expr) = c.raw_expr.as_ref().and_then(|e| e.node.as_ref()) {
+        for (node, ..) in expr.nodes() {
+            if let pg_query::NodeRef::ColumnRef(column) = node {
+                let name = column
+                    .fields
+                    .iter()
+                    .filter_map(name_part)
+                    .collect::<Vec<_>>()
+                    .join(".");
+                if !columns.contains(&name) {
+                    columns.push(name);
+                }
+            }
+        }
+    }
+    columns
+}
+
+/// The `NOT VALID` forms micro-dsql cannot enforce (`None`: fine, or not a `NOT VALID` form).
+fn not_valid_form(c: &Constraint) -> Option<&'static str> {
+    if !is_not_valid_fk_or_check(c) {
+        return None;
+    }
+    if c.contype == ConstrType::ConstrForeign as i32 {
+        if c.fk_attrs.len() != 1 {
+            return Some("multi-column foreign key");
+        }
+        if c.deferrable || c.initdeferred {
+            return Some("deferrable foreign key");
+        }
+        if c.fk_matchtype == "f" {
+            return Some("MATCH FULL foreign key");
+        }
+        None
+    } else if check_columns(c).len() != 1 {
+        Some("multi-column check")
+    } else {
+        None
+    }
 }
 
 /// DSQL's limit of key columns in one index.
@@ -545,6 +675,141 @@ mod tests {
             "CREATE TABLE t (id bigint GENERATED ALWAYS AS IDENTITY (CACHE 65536))",
             "CREATE TABLE t (id bigint GENERATED BY DEFAULT AS IDENTITY (sequence name \"t_id_seq\" INCREMENT BY 1 MINVALUE 1 MAXVALUE 9223372036854775807 START WITH 1 CACHE 65536) PRIMARY KEY)",
             "CREATE TABLE t (id bigint PRIMARY KEY, n int)",
+        ]);
+    }
+
+    const ADD_COLUMN: &str = "ALTER TABLE ADD COLUMN with constraint not supported";
+
+    #[test]
+    fn alter_table_rules() {
+        let mut cases: Vec<(String, &str, &str, String)> = Vec::new();
+        for column in [
+            "d int DEFAULT 0",
+            "d int NOT NULL",
+            "d int NULL",
+            "d int CHECK (d > 0)",
+            "d int UNIQUE",
+            "d int PRIMARY KEY",
+            "d int REFERENCES p (id)",
+            "d bigint GENERATED ALWAYS AS IDENTITY (CACHE 1)",
+            "d int GENERATED ALWAYS AS (1) STORED",
+            "d text NOT NULL DEFAULT 'x'",
+        ] {
+            cases.push((
+                format!("ALTER TABLE t ADD COLUMN {column}"),
+                "add_column_constraint",
+                "0A000",
+                ADD_COLUMN.to_owned(),
+            ));
+        }
+        cases.push((
+            "ALTER TABLE t ADD COLUMN IF NOT EXISTS d int DEFAULT 0".to_owned(),
+            "add_column_constraint",
+            "0A000",
+            ADD_COLUMN.to_owned(),
+        ));
+        for sql in [
+            "ALTER TABLE t ALTER COLUMN w TYPE bigint",
+            "ALTER TABLE t ALTER COLUMN w SET DATA TYPE text USING w::text",
+        ] {
+            cases.push((
+                sql.to_owned(),
+                "alter_column_type",
+                "0A000",
+                "unsupported ALTER TABLE ALTER COLUMN ... SET DATA TYPE statement".to_owned(),
+            ));
+        }
+        cases.push((
+            "ALTER TABLE t ALTER COLUMN w SET NOT NULL".to_owned(),
+            "set_not_null",
+            "0A000",
+            "SET NOT NULL is not supported (only DROP NOT NULL)".to_owned(),
+        ));
+        for sql in [
+            "ALTER TABLE t ADD CONSTRAINT c FOREIGN KEY (a) REFERENCES p (id)",
+            "ALTER TABLE t ADD CONSTRAINT c CHECK (a > 0)",
+            "ALTER TABLE t ADD CONSTRAINT c PRIMARY KEY (a)",
+            "ALTER TABLE t ADD PRIMARY KEY (a)",
+            "ALTER TABLE t ADD CONSTRAINT c UNIQUE (a)",
+            "ALTER TABLE t ADD CONSTRAINT c EXCLUDE USING gist (a WITH =)",
+            "ALTER TABLE t ADD UNIQUE USING INDEX i",
+        ] {
+            cases.push((
+                sql.to_owned(),
+                "add_constraint",
+                "0A000",
+                "unsupported ALTER TABLE ADD CONSTRAINT statement".to_owned(),
+            ));
+        }
+        for (sql, form) in [
+            (
+                "ALTER TABLE t ADD CONSTRAINT c FOREIGN KEY (a, b) REFERENCES p (x, y) NOT VALID",
+                "multi-column foreign key",
+            ),
+            (
+                "ALTER TABLE t ADD CONSTRAINT c FOREIGN KEY (a) REFERENCES p (id) DEFERRABLE NOT VALID",
+                "deferrable foreign key",
+            ),
+            (
+                "ALTER TABLE t ADD CONSTRAINT c FOREIGN KEY (a) REFERENCES p (id) DEFERRABLE INITIALLY DEFERRED NOT VALID",
+                "deferrable foreign key",
+            ),
+            (
+                "ALTER TABLE t ADD CONSTRAINT c FOREIGN KEY (a) REFERENCES p (id) MATCH FULL NOT VALID",
+                "MATCH FULL foreign key",
+            ),
+            (
+                "ALTER TABLE t ADD CONSTRAINT c CHECK (a > b) NOT VALID",
+                "multi-column check",
+            ),
+            (
+                "ALTER TABLE t ADD CONSTRAINT c CHECK (true) NOT VALID",
+                "multi-column check",
+            ),
+        ] {
+            cases.push((
+                sql.to_owned(),
+                "add_constraint_form",
+                "0A000",
+                format!("unsupported NOT VALID constraint form: {form}"),
+            ));
+        }
+        for sql in [
+            "ALTER TABLE t VALIDATE CONSTRAINT c",
+            "ALTER TABLE IF EXISTS t VALIDATE CONSTRAINT c",
+        ] {
+            cases.push((
+                sql.to_owned(),
+                "validate_sync",
+                "0A000",
+                "unsupported ALTER TABLE VALIDATE CONSTRAINT statement".to_owned(),
+            ));
+        }
+        for (sql, rule, state, message) in &cases {
+            assert_eq!(
+                refusal(sql),
+                Some((*rule, *state, message.clone())),
+                "{sql}"
+            );
+        }
+    }
+
+    #[test]
+    fn alter_table_statements_that_pass() {
+        assert_passes(&[
+            "ALTER TABLE t ADD COLUMN c text",
+            "ALTER TABLE t ADD COLUMN IF NOT EXISTS c numeric",
+            "ALTER TABLE t ADD COLUMN c numeric(10, 2), ADD COLUMN d jsonb",
+            "ALTER TABLE t DROP COLUMN c",
+            "ALTER TABLE t RENAME COLUMN a TO b",
+            "ALTER TABLE t RENAME TO u",
+            "ALTER TABLE t ALTER COLUMN w DROP NOT NULL",
+            "ALTER TABLE t ADD CONSTRAINT c FOREIGN KEY (a) REFERENCES p (id) NOT VALID",
+            "ALTER TABLE t ADD CONSTRAINT c FOREIGN KEY (a) REFERENCES p (id) ON DELETE CASCADE ON UPDATE no action NOT VALID",
+            "ALTER TABLE t ADD CONSTRAINT c CHECK (a > 0) NOT VALID",
+            "ALTER TABLE t ADD CONSTRAINT c CHECK (a IS NOT NULL AND a < 10) NOT VALID",
+            "ALTER TABLE ASYNC t VALIDATE CONSTRAINT c",
+            "ALTER TABLE DROP_ME DROP COLUMN pk_col",
         ]);
     }
 }

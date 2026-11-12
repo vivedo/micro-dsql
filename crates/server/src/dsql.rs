@@ -217,8 +217,16 @@ mod tests {
         }
 
         fn refuse(level: tracing::Level, sqls: &[&str]) -> String {
+            refuse_after(level, &[], sqls)
+        }
+
+        /// Like `refuse`, after running `setup` on the connection (outside the policy).
+        fn refuse_after(level: tracing::Level, setup: &[&str], sqls: &[&str]) -> String {
             let db = open_database(&Storage::Memory).unwrap();
             let conn = PgConnection::connect_with(&db, ConnectOpts::new()).unwrap();
+            for sql in setup {
+                crate::internal::exec(&conn, sql).unwrap();
+            }
             let policy = Mutex::new(SessionPolicy::new(PolicyLimits::default()));
             let captured = Captured::default();
             let subscriber = tracing_subscriber::fmt()
@@ -232,6 +240,7 @@ mod tests {
                     let result = run_planned(&conn, &policy, &plan, &Format::UnifiedText, |_| {
                         panic!("a refused statement must not reach the engine: {sql}")
                     });
+                    assert_eq!(txn_status(&conn), TxnStatus::Idle, "{sql}");
                     assert!(result.is_err(), "{sql}");
                 }
             });
@@ -248,6 +257,26 @@ mod tests {
             let log = refuse(tracing::Level::DEBUG, &["TRUNCATE t", "SAVEPOINT a"]);
             assert_eq!(log.lines().count(), 2, "{log}");
             assert!(log.contains("savepoint"), "{log}");
+        }
+
+        /// FR-033 for the one refusal the server decides (from the catalog): it is logged once
+        /// with its rule id, like the stateless ones.
+        #[test]
+        fn a_primary_key_column_refusal_is_logged_once_with_the_rule_id() {
+            let log = refuse_after(
+                tracing::Level::DEBUG,
+                &["CREATE TABLE pkt (id int PRIMARY KEY, v text)"],
+                &["ALTER TABLE pkt DROP COLUMN id"],
+            );
+            // The catalog lookup the check makes logs at debug level too (the engine's own
+            // lines); only the refusal's line counts here.
+            let refusals: Vec<&str> = log
+                .lines()
+                .filter(|line| line.contains("statement refused"))
+                .collect();
+            assert_eq!(refusals.len(), 1, "{log}");
+            assert!(refusals[0].contains("DEBUG"), "{log}");
+            assert!(refusals[0].contains("drop_pk_column"), "{log}");
         }
 
         #[test]

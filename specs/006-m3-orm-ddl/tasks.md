@@ -118,10 +118,10 @@ DSQL's texts. (Placed before US4 because Drizzle's later migrations must hit the
 **Independent Test**: `ALTER TABLE t ADD COLUMN d int DEFAULT 0` → `0A000 ALTER TABLE ADD COLUMN
 with constraint not supported`; the column does not exist.
 
-- [ ] T040 [P] [US6] Write failing policy unit tests in crates/policy/src/ddl_rules.rs for `add_column_constraint` (DEFAULT, NOT NULL, NULL, CHECK, UNIQUE, PRIMARY KEY, REFERENCES, GENERATED, identity; plain `ADD COLUMN [IF NOT EXISTS] c text` and bare `numeric` still pass with the 005 rewrite), `alter_column_type`, `set_not_null`; and `DdlAction::DropColumn` extraction in crates/policy/src/jobs.rs
-- [ ] T041 [P] [US6] Write failing integration tests in crates/server/tests/smoke/dsql_ddl.rs for spec US6 scenarios 1–5, incl. `DROP COLUMN id` on a PK column → `0A000 cannot drop primary key column id` and `DROP COLUMN` of a non-key column still working
-- [ ] T042 [US6] Implement the three AST rules in crates/policy/src/ddl_rules.rs (constructors in crates/policy/src/errors.rs) and `constraints::check_drop_column` (PK columns from the engine catalog, error `errors::drop_pk_column(name)`) called from crates/server/src/ddl.rs before the engine runs
-- [ ] T043 [US6] Run probe 27 (`tests/psql/run.sh 27_alter_table`): outcomes and SQLSTATEs match the reference except documented deviations (`SELECT sys.wait_for_job`, live-DSQL texts) — record for T068
+- [X] T040 [P] [US6] Write failing policy unit tests in crates/policy/src/ddl_rules.rs for `add_column_constraint` (DEFAULT, NOT NULL, NULL, CHECK, UNIQUE, PRIMARY KEY, REFERENCES, GENERATED, identity; plain `ADD COLUMN [IF NOT EXISTS] c text` and bare `numeric` still pass with the 005 rewrite), `alter_column_type`, `set_not_null`; and `DdlAction::DropColumn` extraction in crates/policy/src/jobs.rs
+- [X] T041 [P] [US6] Write failing integration tests in crates/server/tests/smoke/dsql_ddl.rs for spec US6 scenarios 1–5, incl. `DROP COLUMN id` on a PK column → `0A000 cannot drop primary key column id` and `DROP COLUMN` of a non-key column still working
+- [X] T042 [US6] Implement the three AST rules in crates/policy/src/ddl_rules.rs (constructors in crates/policy/src/errors.rs) and `constraints::check_drop_column` (PK columns from the engine catalog, error `errors::drop_pk_column(name)`) called from crates/server/src/ddl.rs before the engine runs
+- [X] T043 [US6] Run probe 27 (`tests/psql/run.sh 27_alter_table`): outcomes and SQLSTATEs match the reference except documented deviations (`SELECT sys.wait_for_job`, live-DSQL texts) — record for T068
 
 **Checkpoint**: all DDL behaviour in place.
 

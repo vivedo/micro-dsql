@@ -4,11 +4,11 @@
 //! Nothing here knows about the engine; the server supplies the random bits of a job id and
 //! runs what the plan describes.
 
-use pg_query::protobuf::{AlterTableType, ObjectType};
+use pg_query::protobuf::{AlterTableType, ConstrType, ObjectType, Token};
 use pg_query::NodeEnum;
 
 use crate::ddl_rules;
-use crate::rewrite::AsyncKind;
+use crate::rewrite::{scan_positions, AsyncKind};
 
 /// Where the job id of a `CALL sys.wait_for_job(...)` comes from.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -89,11 +89,11 @@ pub enum DdlAction {
     },
     /// `DROP TABLE`: the identity sequences of the tables are dropped with them.
     DropTable { tables: Vec<TableRef> },
-    /// `ALTER TABLE ... DROP COLUMN`: refused when the column is part of the primary key.
+    /// `ALTER TABLE ... DROP COLUMN`: refused when a column is part of the primary key.
     DropColumn {
         schema: Option<String>,
         table: String,
-        column: String,
+        columns: Vec<String>,
     },
 }
 
@@ -171,8 +171,28 @@ pub fn job_action(node: &NodeEnum, async_kind: Option<AsyncKind>) -> Option<JobA
 }
 
 /// The [`DdlAction`] of a statement, if any.
-pub fn ddl_action(node: &NodeEnum) -> Option<DdlAction> {
+pub fn ddl_action(node: &NodeEnum, sql: &str) -> Option<DdlAction> {
     match node {
+        NodeEnum::AlterTableStmt(alter) => {
+            let relation = alter.relation.as_ref()?;
+            let schema = non_empty(&relation.schemaname);
+            let table = relation.relname.clone();
+            let columns: Vec<String> = ddl_rules::alter_cmds(node)
+                .filter(|cmd| cmd.subtype == AlterTableType::AtDropColumn as i32)
+                .map(|cmd| cmd.name.clone())
+                .collect();
+            if !columns.is_empty() {
+                return Some(DdlAction::DropColumn {
+                    schema,
+                    table,
+                    columns,
+                });
+            }
+            let cmd = ddl_rules::alter_cmds(node)
+                .find(|cmd| cmd.subtype == AlterTableType::AtAddConstraint as i32)?;
+            let constraint = ddl_rules::constraint(cmd)?;
+            not_valid_action(constraint, schema, table, sql)
+        }
         NodeEnum::DropStmt(drop) if drop.remove_type == ObjectType::ObjectTable as i32 => {
             let tables = drop
                 .objects
@@ -200,6 +220,97 @@ pub fn ddl_action(node: &NodeEnum) -> Option<DdlAction> {
         }
         _ => None,
     }
+}
+
+/// `ADD CONSTRAINT ... NOT VALID` for a form micro-dsql can enforce.
+fn not_valid_action(
+    c: &pg_query::protobuf::Constraint,
+    schema: Option<String>,
+    table: String,
+    sql: &str,
+) -> Option<DdlAction> {
+    if !c.skip_validation {
+        return None;
+    }
+    let (name, kind) = if c.contype == ConstrType::ConstrForeign as i32 {
+        let [column] = c.fk_attrs.as_slice() else {
+            return None;
+        };
+        let column = ddl_rules::name_part(column)?.to_owned();
+        let pk = c.pktable.as_ref()?;
+        let action = |code: &str| match code {
+            "r" => FkAction::Restrict,
+            "c" => FkAction::Cascade,
+            "n" => FkAction::SetNull,
+            "d" => FkAction::SetDefault,
+            _ => FkAction::NoAction,
+        };
+        let name = if c.conname.is_empty() {
+            format!("{table}_{column}_fkey")
+        } else {
+            c.conname.clone()
+        };
+        (
+            name,
+            NotValidKind::ForeignKey {
+                column,
+                ref_schema: non_empty(&pk.schemaname),
+                ref_table: pk.relname.clone(),
+                ref_column: c
+                    .pk_attrs
+                    .first()
+                    .and_then(ddl_rules::name_part)
+                    .map(str::to_owned),
+                on_delete: action(&c.fk_del_action),
+                on_update: action(&c.fk_upd_action),
+            },
+        )
+    } else if c.contype == ConstrType::ConstrCheck as i32 {
+        let mut columns = ddl_rules::check_columns(c);
+        if columns.len() != 1 {
+            return None;
+        }
+        let column = columns.remove(0);
+        let name = if c.conname.is_empty() {
+            format!("{table}_{column}_check")
+        } else {
+            c.conname.clone()
+        };
+        let expr_sql = check_expression(sql, c.location)?;
+        (name, NotValidKind::Check { column, expr_sql })
+    } else {
+        return None;
+    };
+    Some(DdlAction::AddConstraintNotValid {
+        schema,
+        table,
+        name,
+        kind,
+    })
+}
+
+/// The text between the parentheses of the `CHECK (...)` that starts at or after `from`.
+fn check_expression(sql: &str, from: i32) -> Option<String> {
+    let from = usize::try_from(from).ok()?;
+    let tokens = scan_positions(sql);
+    let check = tokens
+        .iter()
+        .position(|t| t.1 >= from && t.0 == Token::Check)?;
+    let open = tokens.get(check + 1).filter(|t| &sql[t.1..t.2] == "(")?;
+    let mut depth = 0_i32;
+    for t in &tokens[check + 1..] {
+        match &sql[t.1..t.2] {
+            "(" => depth += 1,
+            ")" => {
+                depth -= 1;
+                if depth == 0 {
+                    return Some(sql[open.2..t.1].trim().to_owned());
+                }
+            }
+            _ => {}
+        }
+    }
+    None
 }
 
 fn non_empty(text: &str) -> Option<String> {
@@ -323,6 +434,93 @@ mod tests {
         assert_eq!(ddl("DROP INDEX i"), None);
         assert_eq!(ddl("DROP SEQUENCE s"), None);
         assert_eq!(ddl("DROP VIEW v"), None);
+    }
+
+    #[test]
+    fn drop_column_extraction() {
+        assert_eq!(
+            ddl("ALTER TABLE s.t DROP COLUMN a, DROP COLUMN IF EXISTS b"),
+            Some(DdlAction::DropColumn {
+                schema: Some("s".into()),
+                table: "t".into(),
+                columns: vec!["a".into(), "b".into()],
+            })
+        );
+        assert_eq!(ddl("ALTER TABLE t ADD COLUMN a int"), None);
+    }
+
+    #[test]
+    fn add_constraint_not_valid_extraction() {
+        let name = |sql: &str| match ddl(sql) {
+            Some(DdlAction::AddConstraintNotValid { name, .. }) => name,
+            other => panic!("{sql}: {other:?}"),
+        };
+        assert_eq!(
+            ddl(
+                "ALTER TABLE c ADD CONSTRAINT c_fk FOREIGN KEY (parent) REFERENCES s.p (id) \
+                 ON DELETE CASCADE ON UPDATE SET NULL NOT VALID"
+            ),
+            Some(DdlAction::AddConstraintNotValid {
+                schema: None,
+                table: "c".into(),
+                name: "c_fk".into(),
+                kind: NotValidKind::ForeignKey {
+                    column: "parent".into(),
+                    ref_schema: Some("s".into()),
+                    ref_table: "p".into(),
+                    ref_column: Some("id".into()),
+                    on_delete: FkAction::Cascade,
+                    on_update: FkAction::SetNull,
+                },
+            })
+        );
+        // Drizzle's spelling: explicit "no action", quoted names, no referenced column list.
+        assert_eq!(
+            ddl(
+                "ALTER TABLE \"posts\" ADD CONSTRAINT \"posts_author_id_users_id_fk\" FOREIGN KEY \
+                 (\"author_id\") REFERENCES \"public\".\"users\"(\"id\") ON DELETE no action \
+                 ON UPDATE no action NOT VALID"
+            ),
+            Some(DdlAction::AddConstraintNotValid {
+                schema: None,
+                table: "posts".into(),
+                name: "posts_author_id_users_id_fk".into(),
+                kind: NotValidKind::ForeignKey {
+                    column: "author_id".into(),
+                    ref_schema: Some("public".into()),
+                    ref_table: "users".into(),
+                    ref_column: Some("id".into()),
+                    on_delete: FkAction::NoAction,
+                    on_update: FkAction::NoAction,
+                },
+            })
+        );
+        assert_eq!(
+            ddl("ALTER TABLE t ADD CONSTRAINT t_chk CHECK ( a > 0 AND a < 10 ) NOT VALID"),
+            Some(DdlAction::AddConstraintNotValid {
+                schema: None,
+                table: "t".into(),
+                name: "t_chk".into(),
+                kind: NotValidKind::Check {
+                    column: "a".into(),
+                    expr_sql: "a > 0 AND a < 10".into(),
+                },
+            })
+        );
+        assert_eq!(
+            name("ALTER TABLE t ADD CHECK (a > 0) NOT VALID"),
+            "t_a_check"
+        );
+        assert_eq!(
+            name("ALTER TABLE t ADD FOREIGN KEY (a) REFERENCES p (id) NOT VALID"),
+            "t_a_fkey"
+        );
+        // Refused forms and valid constraints carry no action.
+        assert_eq!(ddl("ALTER TABLE t ADD CONSTRAINT c CHECK (a > 0)"), None);
+        assert_eq!(
+            ddl("ALTER TABLE t ADD CONSTRAINT c FOREIGN KEY (a, b) REFERENCES p (x, y) NOT VALID"),
+            None
+        );
     }
 
     #[test]

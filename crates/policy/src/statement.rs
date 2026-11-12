@@ -89,7 +89,7 @@ impl StatementPlan {
             intercept: intercept_node(node),
             values_rows: values_rows(node),
             job: job_action(node, async_kind),
-            ddl: ddl_action(node),
+            ddl: ddl_action(node, &text),
             prelude: identity.prelude,
             cleanup_on_failure: identity.cleanup,
             ..plan(String::new(), false)

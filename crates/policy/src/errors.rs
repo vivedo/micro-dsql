@@ -316,6 +316,69 @@ pub fn cache_value() -> PolicyError {
     PolicyError::new("cache_value", "0A000", "CACHE must be 1 or at least 65536")
 }
 
+/// `0A000`: `ADD COLUMN` with a constraint or default.
+pub fn add_column_constraint() -> PolicyError {
+    PolicyError::new(
+        "add_column_constraint",
+        "0A000",
+        "ALTER TABLE ADD COLUMN with constraint not supported",
+    )
+}
+
+/// `0A000`: `ALTER COLUMN ... TYPE`.
+pub fn alter_column_type() -> PolicyError {
+    PolicyError::new(
+        "alter_column_type",
+        "0A000",
+        "unsupported ALTER TABLE ALTER COLUMN ... SET DATA TYPE statement",
+    )
+}
+
+/// `0A000`: `ALTER COLUMN ... SET NOT NULL`.
+pub fn set_not_null() -> PolicyError {
+    PolicyError::new(
+        "set_not_null",
+        "0A000",
+        "SET NOT NULL is not supported (only DROP NOT NULL)",
+    )
+}
+
+/// `0A000`: dropping a primary-key column (decided by the server from the catalog).
+pub fn drop_pk_column(column: &str) -> PolicyError {
+    PolicyError::new(
+        "drop_pk_column",
+        "0A000",
+        format!("cannot drop primary key column {column}"),
+    )
+}
+
+/// `0A000`: an `ADD CONSTRAINT` other than a `NOT VALID` foreign key or check.
+pub fn add_constraint() -> PolicyError {
+    PolicyError::new(
+        "add_constraint",
+        "0A000",
+        "unsupported ALTER TABLE ADD CONSTRAINT statement",
+    )
+}
+
+/// `0A000`: a `NOT VALID` form micro-dsql cannot enforce (`form` names it).
+pub fn add_constraint_form(form: &str) -> PolicyError {
+    PolicyError::new(
+        "add_constraint_form",
+        "0A000",
+        format!("unsupported NOT VALID constraint form: {form}"),
+    )
+}
+
+/// `0A000`: `VALIDATE CONSTRAINT` without `ASYNC`.
+pub fn validate_sync() -> PolicyError {
+    PolicyError::new(
+        "validate_sync",
+        "0A000",
+        "unsupported ALTER TABLE VALIDATE CONSTRAINT statement",
+    )
+}
+
 /// `42809`: `sys.wait_for_job` called from a query.
 pub fn wait_for_job_select() -> PolicyError {
     PolicyError::new(

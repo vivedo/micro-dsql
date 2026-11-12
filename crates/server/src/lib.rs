@@ -829,10 +829,13 @@ fn describe(
         if let Some(columns) = plan.reply_columns() {
             return Ok(reply_fields(&columns, format));
         }
-        let answered_here = match &plan.setting {
-            Some(SettingCommand::ResetAll) | None => plan.intercept.is_some(),
-            Some(_) => true,
-        };
+        // DDL the server runs itself returns no rows, and the engine may not even prepare the
+        // text it carries (`ADD CONSTRAINT ... NOT VALID`, a refused `DROP COLUMN`).
+        let answered_here = plan.ddl.is_some()
+            || match &plan.setting {
+                Some(SettingCommand::ResetAll) | None => plan.intercept.is_some(),
+                Some(_) => true,
+            };
         if answered_here {
             return Ok(vec![]);
         }

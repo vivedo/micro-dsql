@@ -335,3 +335,160 @@ async fn dropping_a_table_drops_its_identity_sequences() {
         );
     }
 }
+
+use crate::dsql_rules::ABORTED;
+
+async fn column_exists(c: &Client, table: &str, column: &str) -> bool {
+    value(
+        c,
+        &format!(
+            "SELECT count(*) FROM pg_attribute a JOIN pg_class t ON t.oid = a.attrelid \
+             WHERE t.relname = '{table}' AND a.attname = '{column}' AND a.attnum > 0"
+        ),
+    )
+    .await
+        == s("1")
+}
+
+#[tokio::test]
+async fn alter_table_forms_dsql_refuses() {
+    let server = TestServer::start();
+    let c = server.connect().await;
+    for proto in PROTOS {
+        let t = format!("alt_{proto:?}").to_lowercase();
+        proto
+            .ok(
+                &c,
+                &format!("CREATE TABLE {t} (id int PRIMARY KEY, w int, v text)"),
+            )
+            .await;
+        for (i, column) in [
+            "d int DEFAULT 0",
+            "d int NOT NULL",
+            "d int CHECK (d > 0)",
+            "d int UNIQUE",
+            "d int PRIMARY KEY",
+            "d int REFERENCES alt_target (id)",
+            "d bigint GENERATED ALWAYS AS IDENTITY (CACHE 1)",
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            assert_eq!(
+                proto
+                    .err(&c, &format!("ALTER TABLE {t} ADD COLUMN {column}"))
+                    .await,
+                e(
+                    "0A000",
+                    "ALTER TABLE ADD COLUMN with constraint not supported"
+                ),
+                "{proto:?} {i}"
+            );
+        }
+        assert!(!column_exists(&c, &t, "d").await, "{proto:?}");
+        // A plain column, with or without IF NOT EXISTS and with a bare numeric, still works.
+        proto
+            .ok(&c, &format!("ALTER TABLE {t} ADD COLUMN d text"))
+            .await;
+        // (`ADD COLUMN IF NOT EXISTS` passes the M3 rules; the engine itself refuses it: known gap.)
+        proto
+            .ok(&c, &format!("ALTER TABLE {t} ADD COLUMN n numeric"))
+            .await;
+        assert!(column_exists(&c, &t, "d").await);
+        assert_eq!(
+            proto
+                .err(&c, &format!("ALTER TABLE {t} ALTER COLUMN w TYPE bigint"))
+                .await,
+            e(
+                "0A000",
+                "unsupported ALTER TABLE ALTER COLUMN ... SET DATA TYPE statement"
+            ),
+            "{proto:?}"
+        );
+        assert_eq!(
+            proto
+                .err(&c, &format!("ALTER TABLE {t} ALTER COLUMN w SET NOT NULL"))
+                .await,
+            e(
+                "0A000",
+                "SET NOT NULL is not supported (only DROP NOT NULL)"
+            ),
+            "{proto:?}"
+        );
+        // A refusal inside a transaction aborts it.
+        proto.ok(&c, "BEGIN").await;
+        assert_eq!(
+            proto
+                .err(&c, &format!("ALTER TABLE {t} ADD COLUMN z int DEFAULT 1"))
+                .await
+                .code,
+            "0A000"
+        );
+        assert_eq!(
+            proto.err(&c, "SELECT 1").await,
+            e("25P02", ABORTED),
+            "{proto:?}"
+        );
+        proto.ok(&c, "ROLLBACK").await;
+    }
+}
+
+#[tokio::test]
+async fn dropping_a_primary_key_column_is_refused() {
+    let server = TestServer::start();
+    let c = server.connect().await;
+    for proto in PROTOS {
+        let t = format!("pk_{proto:?}").to_lowercase();
+        proto
+            .ok(
+                &c,
+                &format!("CREATE TABLE {t} (id int PRIMARY KEY, v text)"),
+            )
+            .await;
+        proto
+            .ok(
+                &c,
+                &format!("CREATE TABLE {t}_c (a int, b int, v text, PRIMARY KEY (a, b))"),
+            )
+            .await;
+        assert_eq!(
+            proto
+                .err(&c, &format!("ALTER TABLE {t} DROP COLUMN id"))
+                .await,
+            e("0A000", "cannot drop primary key column id"),
+            "{proto:?}"
+        );
+        assert_eq!(
+            proto
+                .err(
+                    &c,
+                    &format!("ALTER TABLE {t}_c DROP COLUMN v, DROP COLUMN b")
+                )
+                .await,
+            e("0A000", "cannot drop primary key column b"),
+            "{proto:?}"
+        );
+        assert!(column_exists(&c, &t, "id").await);
+        assert!(column_exists(&c, &format!("{t}_c"), "v").await, "{proto:?}");
+        // A non-key column can still be dropped.
+        proto
+            .ok(&c, &format!("ALTER TABLE {t} DROP COLUMN v"))
+            .await;
+        assert!(!column_exists(&c, &t, "v").await);
+        // The refusal aborts a transaction like every other refusal.
+        proto.ok(&c, "BEGIN").await;
+        assert_eq!(
+            proto
+                .err(&c, &format!("ALTER TABLE {t} DROP COLUMN id"))
+                .await,
+            e("0A000", "cannot drop primary key column id")
+        );
+        assert_eq!(
+            proto.err(&c, "SELECT 1").await,
+            e("25P02", ABORTED),
+            "{proto:?}"
+        );
+        proto.ok(&c, "ROLLBACK").await;
+        proto.ok(&c, &format!("SELECT * FROM {t}")).await;
+    }
+}

@@ -6,7 +6,8 @@ use micro_dsql_policy::{DdlAction, StatementPlan, TableRef, TxnStatus};
 use pgwire::error::PgWireResult;
 use turso_pg::PgConnection;
 
-use crate::dsql::txn_status;
+use crate::constraints;
+use crate::dsql::{policy_error, txn_status};
 use crate::internal::{exec, ident, literal, query};
 use crate::Outcome;
 
@@ -20,6 +21,21 @@ pub(crate) fn run_ddl_statement(
     plan: &StatementPlan,
     run_engine: impl FnOnce(&str) -> PgWireResult<(Outcome, u64)>,
 ) -> PgWireResult<(Outcome, u64)> {
+    // A refusal the server decides from the catalog: like the stateless ones it aborts an open
+    // transaction block and is logged once with its rule id.
+    if let Some(DdlAction::DropColumn {
+        schema,
+        table,
+        columns,
+    }) = &plan.ddl
+    {
+        if let Some(error) =
+            constraints::check_drop_column(conn, schema.as_deref(), table, columns)?
+        {
+            conn.abort_transaction_block_on_error();
+            return Err(policy_error(error));
+        }
+    }
     // The sequences of the identity columns of the tables a DROP TABLE removes.
     let to_drop = match &plan.ddl {
         Some(DdlAction::DropTable { tables }) => identity_sequences(conn, tables)?,

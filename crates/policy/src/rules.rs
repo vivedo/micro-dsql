@@ -676,7 +676,7 @@ mod tests {
             "CREATE TABLE t (id bigint GENERATED ALWAYS AS IDENTITY (CACHE 1))",
             "ALTER TABLE t ADD COLUMN c int",
             "ALTER TABLE t DROP COLUMN c",
-            "ALTER TABLE t ADD CONSTRAINT c CHECK (id > 0)",
+            "ALTER TABLE t ADD CONSTRAINT c CHECK (id > 0) NOT VALID",
             "ANALYZE t",
             "ANALYZE",
             "CREATE VIEW v AS SELECT 1",
