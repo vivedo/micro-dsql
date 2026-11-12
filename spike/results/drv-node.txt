@@ -1,0 +1,16 @@
+[node-pg] version pg 8.23.1, node v22.22.2
+[node-pg] connect: OK
+[node-pg] drop: OK
+[node-pg] create: OK
+[node-pg] insert params: OK 1
+[node-pg] select by param: OK {"id":"1","name":"one","n":1,"amount":1.5,"ok":true,"at":"2026-11-12T10:00:00.123Z","u":"11111111-1111-1111-1111-111111111111","doc":{"a":1}}
+[node-pg] timestamptz round trip: OK "exact"
+[node-pg] update by param: OK 1
+[node-pg] explicit txn commit: OK {"n":20}
+[node-pg] explicit txn rollback: OK {"n":0}
+[node-pg] named prepared statement: OK [{"name":"uno"},{"name":"two"}]
+[node-pg] delete by param: OK 1
+[node-pg] count: OK {"count":"1"}
+[node-pg] error SQLSTATE (dup key): ERR 23505 duplicate key value violates unique constraint "drv_node_pkey"
+[node-pg] failures=1
+exit=0

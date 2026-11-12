@@ -1,0 +1,15 @@
+[wire] RowDescription for 'SELECT * FROM t_wire':
+        id=20, n=23, s=23, amount=701, bn=701, f=701, ok=16, at=1184, u=2950, j=3802, t=25
+        row text values: (1, 2, 3, 4.5, 5.5, 6.5, True, datetime.datetime(2026, 1, 1, 0, 0, 0, 123000, tzinfo=zoneinfo.ZoneInfo(key='Etc/UTC')), UUID('11111111-1111-1111-1111-111111111111'), {'k': 1}, 'x')
+[wire] RowDescription for "SELECT count(*), sum(n), sum(amount), avg(n), max(at), 1, 1.5, 'a', now(), 2::bigint FROM t_wire":
+        count=25, sum=25, sum=25, avg=25, max=1184, ?column?=23, ?column?=701, ?column?=25, now=1184, int8=20
+        row text values: ('1', '2', '4.5', '2.0', datetime.datetime(2026, 1, 1, 0, 0, 0, 123000, tzinfo=zoneinfo.ZoneInfo(key='Etc/UTC')), 1, 1.5, 'a', datetime.datetime(2026, 11, 12, 1, 7, 16, 702000, tzinfo=zoneinfo.ZoneInfo(key='Etc/UTC')), 2)
+[wire] Parse+Describe 'SELECT * FROM t_wire WHERE id = $1 AND n = $2': status=COMMAND_OK ParameterDescription nparams=0 types=[]
+[wire] Parse+Describe 'SELECT $1::int + 1': status=COMMAND_OK ParameterDescription nparams=0 types=[]
+[wire] Parse+Describe 'INSERT INTO t_wire (id, t) VALUES ($1, $2)': status=COMMAND_OK ParameterDescription nparams=0 types=[]
+[wire] Bind param text '1': status=TUPLES_OK rows=1 value=b'x' err=''
+[wire] Bind param binary int8 1: status=FATAL_ERROR rows=0 value=None err='ERROR:  invalid integer parameter: invalid digit found in string'
+[wire] binary result format: status=TUPLES_OK err=''
+        id(oid 20)=b'\x00\x00\x00\x00\x00\x00\x00\x01', n(oid 23)=b'\x00\x00\x00\x02', amount(oid 701)=b'4.50', at(oid 1184)=b'2026-01-01 00:00:00.123+00', u(oid 2950)=b'11111111-1111-1111-1111-111111111111'
+[wire] Terminate: server did NOT close the connection within 3s
+exit=0

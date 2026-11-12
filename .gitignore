@@ -1,2 +1,7 @@
 target/
 reports/
+.venv/
+node_modules/
+spike/drivers/go/pgx-smoke
+spike/results/server-*.log
+__pycache__/
