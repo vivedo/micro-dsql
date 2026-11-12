@@ -119,9 +119,9 @@ not supported`; `SET enable_seqscan = off; SHOW enable_seqscan` → `off`.
 **Independent Test**: `CREATE TABLE t (id int PRIMARY KEY, n numeric); INSERT INTO t VALUES (1,
 1.5); SELECT n FROM t` returns `1.500000`.
 
-- [ ] T037 [P] [US5] Write failing unit tests for the `bare_numeric` rewrite in crates/policy/src/rewrite.rs: `CREATE TABLE … (n numeric, d decimal, e numeric(5), f numeric(10,2))` → only `n` and `d` get `(18,6)`; quoted identifiers and comments untouched; `ALTER TABLE … ADD COLUMN n numeric` rewritten; `SELECT 1.5::numeric` and `CAST(x AS numeric)` not rewritten; `engine_sql` differs only by the inserted text
-- [ ] T038 [P] [US5] Write failing integration tests in crates/server/tests/smoke/dsql_settings.rs (numeric section): stored value of a bare `numeric` column reads back as `1.500000` (text) and `numeric(5)` / `numeric(10,2)` columns are unchanged; an error in a rewritten statement reports a position in the client's original text
-- [ ] T039 [US5] Implement `bare_numeric` in `REWRITES` (locate the type-name token from `TypeName.location` and the scanner token stream; insert `(18,6)` after it) in crates/policy/src/rewrite.rs and apply edits in `StatementPlan::new` (step 7) in crates/policy/src/statement.rs
+- [x] T037 [P] [US5] Write failing unit tests for the `bare_numeric` rewrite in crates/policy/src/rewrite.rs: `CREATE TABLE … (n numeric, d decimal, e numeric(5), f numeric(10,2))` → only `n` and `d` get `(18,6)`; quoted identifiers and comments untouched; `ALTER TABLE … ADD COLUMN n numeric` rewritten; `SELECT 1.5::numeric` and `CAST(x AS numeric)` not rewritten; `engine_sql` differs only by the inserted text
+- [x] T038 [P] [US5] Write failing integration tests in crates/server/tests/smoke/dsql_settings.rs (numeric section): stored value of a bare `numeric` column reads back as `1.500000` (text) and `numeric(5)` / `numeric(10,2)` columns are unchanged; an error in a rewritten statement reports a position in the client's original text
+- [x] T039 [US5] Implement `bare_numeric` in `REWRITES` (locate the type-name token from `TypeName.location` and the scanner token stream; insert `(18,6)` after it) in crates/policy/src/rewrite.rs and apply edits in `StatementPlan::new` (step 7) in crates/policy/src/statement.rs
 
 ## Phase 8: Polish & Cross-Cutting Concerns
 

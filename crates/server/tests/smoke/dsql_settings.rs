@@ -397,3 +397,65 @@ async fn show_of_locale_parameters_is_unrecognized() {
     }
     assert_eq!(simple_err(&c, "SHOW lc_collate").await.code, "42704");
 }
+
+// ---------------------------------------------------------------------------------------------
+// Bare numeric means numeric(18,6) (FR-040, FR-041)
+// ---------------------------------------------------------------------------------------------
+
+#[tokio::test]
+async fn bare_numeric_columns_store_scale_six() {
+    let server = TestServer::start();
+    let c = server.connect().await;
+    for proto in PROTOS {
+        let t = format!("num_{proto:?}").to_lowercase();
+        proto
+            .ok(
+                &c,
+                &format!(
+                    "CREATE TABLE {t} (id int PRIMARY KEY, n numeric, d decimal, q numeric(10,2))"
+                ),
+            )
+            .await;
+        proto
+            .ok(&c, &format!("INSERT INTO {t} VALUES (1, 1.5, 2.25, 1.5)"))
+            .await;
+        let row = |col: &str| {
+            let sql = format!("SELECT {col}::text FROM {t} WHERE id = 1");
+            let c = &c;
+            async move { value(c, &sql).await.expect("a value") }
+        };
+        assert_eq!(row("n").await, "1.500000", "{proto:?}");
+        assert_eq!(row("d").await, "2.250000", "{proto:?}");
+        // Explicit precision is untouched.
+        assert_eq!(row("q").await, "1.50", "{proto:?}");
+        // ALTER TABLE ... ADD COLUMN too.
+        proto
+            .ok(&c, &format!("ALTER TABLE {t} ADD COLUMN extra numeric"))
+            .await;
+        proto
+            .ok(&c, &format!("UPDATE {t} SET extra = 3.5 WHERE id = 1"))
+            .await;
+        assert_eq!(row("extra").await, "3.500000", "{proto:?}");
+        // A numeric in an expression is not a column type: no rewrite.
+        assert_eq!(
+            value(&c, "SELECT (1.5)::numeric::text").await.as_deref(),
+            Some("1.5")
+        );
+    }
+}
+
+#[tokio::test]
+async fn error_positions_refer_to_the_text_the_client_sent() {
+    let server = TestServer::start();
+    let c = server.connect().await;
+    let sql = "ALTER TABLE no_such_tbl ADD COLUMN n numeric";
+    let err = c.simple_query(sql).await.unwrap_err();
+    let db = err.as_db_error().expect("a server error");
+    let expected = sql.find("no_such_tbl").unwrap() + 1;
+    match db.position() {
+        Some(tokio_postgres::error::ErrorPosition::Original(p)) => {
+            assert_eq!(*p as usize, expected, "{db:?}")
+        }
+        other => panic!("{other:?}: {db:?}"),
+    }
+}
