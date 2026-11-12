@@ -147,3 +147,76 @@ async fn show_in_a_failed_transaction_gives_25p02() {
     rows(&c, "ROLLBACK").await;
     assert!(value(&c, "SHOW server_version").await.is_some());
 }
+
+/// Sends one frontend message: tag, length, body.
+fn send(socket: &mut TcpStream, tag: u8, body: &[u8]) {
+    let mut message = vec![tag];
+    message.extend_from_slice(&((body.len() + 4) as u32).to_be_bytes());
+    message.extend_from_slice(body);
+    socket.write_all(&message).unwrap();
+}
+
+/// Reads messages up to ReadyForQuery; returns command tags and error SQLSTATEs in order.
+fn read_until_ready(socket: &mut TcpStream) -> Vec<String> {
+    let mut seen = Vec::new();
+    loop {
+        let (tag, body) = read_message(socket);
+        match tag {
+            b'C' => seen.push(String::from_utf8_lossy(&body[..body.len() - 1]).into_owned()),
+            b'E' => {
+                let code = body
+                    .split(|b| *b == 0)
+                    .find(|field| field.first() == Some(&b'C'))
+                    .map(|field| String::from_utf8_lossy(&field[1..]).into_owned())
+                    .unwrap_or_default();
+                seen.push(format!("ERROR {code}"));
+            }
+            b'Z' => return seen,
+            _ => {}
+        }
+    }
+}
+
+/// psycopg sends `DEALLOCATE ALL` after a DROP/ALTER once it holds server-side prepared
+/// statements. micro-dsql answers `DEALLOCATE` with PostgreSQL's command tags; it does not
+/// remove the protocol-level statement (KNOWN_GAPS.md "DEALLOCATE").
+#[test]
+fn deallocate_is_answered_with_its_command_tag() {
+    let server = TestServer::start();
+    let (mut socket, _) = raw_startup(&server);
+    // Parse "p1" (no parameter types), then Sync.
+    send(&mut socket, b'P', b"p1\0SELECT 1\0\0\0");
+    send(&mut socket, b'S', b"");
+    assert_eq!(read_until_ready(&mut socket), Vec::<String>::new());
+
+    send(&mut socket, b'Q', b"DEALLOCATE p1\0");
+    assert_eq!(read_until_ready(&mut socket), ["DEALLOCATE"]);
+    send(&mut socket, b'Q', b"DEALLOCATE PREPARE ALL\0");
+    assert_eq!(read_until_ready(&mut socket), ["DEALLOCATE ALL"]);
+    send(&mut socket, b'Q', b"BEGIN; DEALLOCATE ALL; COMMIT\0");
+    assert_eq!(
+        read_until_ready(&mut socket),
+        ["BEGIN", "DEALLOCATE ALL", "COMMIT"]
+    );
+    // Inside a failed transaction block it is refused like any other statement.
+    send(&mut socket, b'Q', b"BEGIN; SELECT 1/0\0");
+    assert_eq!(read_until_ready(&mut socket), ["BEGIN", "ERROR 22012"]);
+    send(&mut socket, b'Q', b"DEALLOCATE ALL\0");
+    assert_eq!(read_until_ready(&mut socket), ["ERROR 25P02"]);
+    send(&mut socket, b'Q', b"ROLLBACK\0");
+    assert_eq!(read_until_ready(&mut socket), ["ROLLBACK"]);
+}
+
+#[tokio::test]
+async fn deallocate_all_after_ddl_keeps_the_session_usable() {
+    let server = TestServer::start();
+    let c = server.connect().await;
+    rows(&c, "CREATE TABLE dealloc (id int PRIMARY KEY)").await;
+    c.execute("INSERT INTO dealloc VALUES ($1)", &[&1i32])
+        .await
+        .unwrap();
+    rows(&c, "DROP TABLE dealloc").await;
+    rows(&c, "DEALLOCATE ALL").await;
+    c.execute("DEALLOCATE ALL", &[]).await.unwrap();
+    assert_eq!(value(&c, "SELECT 1").await, s("1"));
+}
