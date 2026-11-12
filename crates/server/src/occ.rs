@@ -44,7 +44,6 @@ pub(crate) trait Engine {
     /// Runs `sql` and returns its outcome and change count.
     fn run(&mut self, sql: &str) -> PgWireResult<(Outcome, u64)>;
     /// The outcome of `sql` with no rows and a 0 count (describe only, no execution).
-    #[allow(dead_code)] // used by the deferred-conflict replay
     fn empty(&mut self, sql: &str) -> PgWireResult<(Outcome, u64)>;
 }
 
@@ -148,19 +147,63 @@ fn implicit_transaction(
     })
 }
 
+/// Re-opens the engine transaction of the client after a rollback: its own `BEGIN` text (so
+/// options such as `READ ONLY` survive), and, when the snapshot is taken at `BEGIN`, the pin.
+fn reopen(conn: &PgConnection, policy: &Mutex<SessionPolicy>) -> PgWireResult<()> {
+    rollback(conn);
+    let begin = lock(policy).begin_sql().unwrap_or("BEGIN").to_owned();
+    exec(conn, &begin)
+}
+
+/// A statement of an explicit transaction that hit a write conflict (DSQL reports it at
+/// `COMMIT`): roll back, re-open the transaction on a fresh snapshot, flag it doomed, and run
+/// the statement once more. If it conflicts again (the other writer is still open) the
+/// statement answers with no rows. Anything else is the statement's own error.
+fn defer_conflict(
+    conn: &PgConnection,
+    policy: &Mutex<SessionPolicy>,
+    engine: &mut dyn Engine,
+    sql: &str,
+    conflict: PgWireError,
+) -> PgWireResult<(Outcome, u64)> {
+    debug!("deferred conflict");
+    if reopen(conn, policy).is_err() {
+        return Err(conflict);
+    }
+    lock(policy).mark_doomed();
+    match engine.run(sql) {
+        Err(second) if failure_of(&second) == Some(EngineFailure::DataConflict) => {
+            reopen(conn, policy)?;
+            engine.empty(sql)
+        }
+        other => other,
+    }
+}
+
 /// The engine closure `run_planned` calls for the client's statement: the statement itself,
 /// inside whatever wrapper its situation calls for.
 fn run_wrapped(
     conn: &PgConnection,
     policy: &Mutex<SessionPolicy>,
     plan: &StatementPlan,
+    opts: &OccOptions,
     engine: &mut dyn Engine,
     sql: &str,
 ) -> PgWireResult<(Outcome, u64)> {
-    let idle = dsql::txn_status(conn) == TxnStatus::Idle;
-    match plan.class {
-        StatementClass::Dml if idle => implicit_transaction(conn, policy, engine, sql),
-        StatementClass::Ddl if idle => with_busy_retry(|| engine.run(sql)),
+    let status = dsql::txn_status(conn);
+    match (plan.class, status) {
+        (StatementClass::Dml, TxnStatus::Idle) => implicit_transaction(conn, policy, engine, sql),
+        (StatementClass::Ddl, TxnStatus::Idle) => with_busy_retry(|| engine.run(sql)),
+        (StatementClass::Dml, TxnStatus::Active)
+            if opts.defer_conflicts && !lock(policy).is_implicit() =>
+        {
+            match engine.run(sql) {
+                Err(error) if failure_of(&error) == Some(EngineFailure::DataConflict) => {
+                    defer_conflict(conn, policy, engine, sql, error)
+                }
+                other => other,
+            }
+        }
         _ => engine.run(sql),
     }
 }
@@ -171,11 +214,11 @@ pub(crate) fn run(
     policy: &Mutex<SessionPolicy>,
     plan: &StatementPlan,
     format: &Format,
-    _opts: &OccOptions,
+    opts: &OccOptions,
     engine: &mut dyn Engine,
 ) -> PgWireResult<Outcome> {
     dsql::run_planned(conn, policy, plan, format, |sql| {
-        run_wrapped(conn, policy, plan, engine, sql)
+        run_wrapped(conn, policy, plan, opts, engine, sql)
     })
 }
 

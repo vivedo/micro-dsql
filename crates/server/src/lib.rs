@@ -676,7 +676,6 @@ impl occ::Engine for SimpleEngine<'_> {
 }
 
 /// A statement's result with no rows: its header, or its command tag with a 0 count.
-#[allow(dead_code)] // used by the deferred-conflict replay
 fn empty_outcome(
     stmt: &turso_pg::Statement,
     parsed: &ParseResult,
