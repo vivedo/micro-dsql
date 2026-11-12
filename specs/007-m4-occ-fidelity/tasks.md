@@ -164,8 +164,8 @@ multi-statement strings; residual contention retried, else OC001.
 
 ## Phase 8: Polish & gates
 
-- [ ] T060 Run the gates: `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings`, `cargo test --workspace`; start `cargo run -p micro-dsql -- --listen 127.0.0.1:15507` and run `tests/psql/run.sh` (5/5 PASS, expected outputs unchanged)
-- [ ] T061 Grep the diff for machine-specific paths and tool attribution (`git diff main --stat`, then search for absolute home/mount paths); none allowed
+- [x] T060 Run the gates: `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings`, `cargo test --workspace`; start `cargo run -p micro-dsql -- --listen 127.0.0.1:15507` and run `tests/psql/run.sh` (5/5 PASS, expected outputs unchanged)
+- [x] T061 Grep the diff for machine-specific paths and tool attribution (`git diff main --stat`, then search for absolute home/mount paths); none allowed
 - [x] T062 Walk through quickstart.md's manual two-session table on `127.0.0.1:15507` and paste the observed results into `specs/007-m4-occ-fidelity/research.md` §1 (dated block)
 - [ ] T063 [orchestrator] MiniStack differential (`scripts/ministack-up.sh`, `scripts/compare.sh`, Docker) for `tests/psql/probes/26_locking_reads.sql` and the layer-1 scenarios; attach the report
 - [ ] T064 [owner] Live-DSQL verification of the matrix rows marked as differences (who loses; FOR KEY SHARE vs DELETE; FK parent/child), of the locking-clause refusal text for joins, and of `NOWAIT`/`SKIP LOCKED` acceptance; update docs/known-gaps.md "Rule texts without a live record" accordingly
