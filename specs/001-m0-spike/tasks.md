@@ -1,0 +1,61 @@
+# Tasks: M0 spike — does Turso's Postgres frontend hold up?
+
+**Input**: Design documents from `specs/001-m0-spike/`
+**Prerequisites**: plan.md, spec.md, research.md, data-model.md, contracts/script-interface.md, quickstart.md
+
+**Tests**: the spike scripts *are* the tests; no separate test tasks. Cargo gates are N/A (no Rust crate yet).
+
+## Format: `[ID] [P?] [Story] Description`
+
+## Phase 1: Setup
+
+- [ ] T001 Add `.venv/`, `node_modules/`, Go build output to `.gitignore`
+- [ ] T002 Create `spike/env.sh` (PG* defaults, overridable) and `spike/README.md` (prerequisites, how to run)
+- [ ] T003 [P] Create `spike/drivers/requirements.txt` (psycopg[binary], asyncpg) and install into `.venv`
+- [ ] T004 [P] Create `spike/drivers/node/package.json` with `pg`, run `npm install` (commit lockfile)
+- [ ] T005 [P] Create `spike/drivers/go/go.mod` with pgx v5, run `go mod tidy` (commit go.sum)
+
+## Phase 2: Foundational (blocking)
+
+- [ ] T006 Build `tursopg` release in the local Turso clone; record commit, toolchain, duration, warnings
+- [ ] T007 Start `tursopg --server 127.0.0.1:5432`; verify `SELECT 1` over psql (HARD STOP if it fails)
+
+## Phase 3: User Story 1 — Build and connect (P1)
+
+- [ ] T008 [US1] Create `spike/connect.sh`: SELECT 1, current_user, current_database(), SHOW server_version/timezone, arbitrary password
+
+## Phase 4: User Story 2 — App SQL (P1)
+
+- [ ] T009 [P] [US2] Write `spike/app/schema.sql` (5 tables, PK/FK, all listed types, indexes, seed data)
+- [ ] T010 [P] [US2] Write `spike/app/queries.sql` (≥15 queries incl. joins, aggregates, ORDER BY/LIMIT, upsert, RETURNING, CTE, window, jsonb, timestamptz µs, uuid, numeric, int4 overflow probe)
+- [ ] T011 [US2] Write `spike/app/run.sh` (psql -X -e, ON_ERROR_STOP 0, VERBOSITY verbose)
+
+## Phase 5: User Story 3 — Driver matrix (P1)
+
+- [ ] T012 [P] [US3] `spike/drivers/psql.sh`
+- [ ] T013 [P] [US3] `spike/drivers/psycopg_smoke.py`
+- [ ] T014 [P] [US3] `spike/drivers/asyncpg_smoke.py`
+- [ ] T015 [P] [US3] `spike/drivers/node/pg_smoke.js`
+- [ ] T016 [P] [US3] `spike/drivers/go/main.go`
+
+## Phase 6: User Story 4 — OCC (P1)
+
+- [ ] T017 [US4] `spike/occ/occ.py`: same-row UPDATE, same-PK INSERT, write skew, autocommit storm, isolation-level probe, final-state checks, watchdog timeouts
+
+## Phase 7: User Story 5 — Findings (P1)
+
+- [ ] T018 [US5] `spike/run-all.sh` running all of the above into `spike/results/*.txt`; run it against tursopg
+- [ ] T019 [US5] Extra probes for research [I] items (int4 overflow, binary params, startup/timing, DSQL-rejected statements accepted by Turso) recorded in `spike/results/`
+- [ ] T020 [US5] Write `research/06-spike-findings.md` (commit, toolchain, build, tables, [I] verdicts, go/no-go, blockers + effort)
+
+## Phase 8: Polish
+
+- [ ] T021 Check no machine-specific paths in committed files; stop tursopg; commit
+
+## Dependencies
+
+T006 → T007 → all US phases. US2–US4 independent of each other. T018 needs T008–T017. T020 needs T018–T019.
+
+## Implementation Strategy
+
+Hard-stop check first (T007), then scripts in parallel, one recorded run, then the findings document.
