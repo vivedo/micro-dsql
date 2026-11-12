@@ -1,0 +1,35 @@
+DROP TABLE IF EXISTS p24_a;
+DROP TABLE IF EXISTS p24_b;
+CREATE TABLE p24_a (x int PRIMARY KEY);
+-- A transaction that only reads may run one DDL.
+BEGIN;
+SELECT count(*) FROM p24_a;
+ count 
+-------
+     0
+(1 row)
+
+CREATE TABLE p24_b (x int PRIMARY KEY);
+COMMIT;
+-- COMMIT resets the per-transaction state.
+BEGIN;
+INSERT INTO p24_a VALUES (1);
+COMMIT;
+BEGIN;
+INSERT INTO p24_a VALUES (2);
+INSERT INTO p24_b VALUES (2);
+COMMIT;
+SELECT (SELECT count(*) FROM p24_a) AS a_rows, (SELECT count(*) FROM p24_b) AS b_rows;
+ a_rows | b_rows 
+--------+--------
+      2 |      1
+(1 row)
+
+-- DROP is DDL too.
+BEGIN;
+DROP TABLE p24_b;
+DROP TABLE p24_a;
+psql:24_txn_discipline.sql:27: ERROR:  25006: only one DDL statement can be run in a transaction
+ROLLBACK;
+DROP TABLE IF EXISTS p24_a;
+DROP TABLE IF EXISTS p24_b;

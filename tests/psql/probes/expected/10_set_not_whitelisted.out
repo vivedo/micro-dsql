@@ -1,0 +1,49 @@
+SET work_mem = '64MB';
+psql:10_set_not_whitelisted.sql:6: ERROR:  0A000: setting configuration parameter "work_mem" not supported
+SET statement_timeout = '5s';
+psql:10_set_not_whitelisted.sql:7: ERROR:  0A000: setting configuration parameter "statement_timeout" not supported
+SET lock_timeout = '1s';
+SET idle_in_transaction_session_timeout = '1min';
+SET default_statistics_target = 200;
+psql:10_set_not_whitelisted.sql:10: ERROR:  0A000: setting configuration parameter "default_statistics_target" not supported
+SELECT set_config('work_mem', '8MB', false);
+psql:10_set_not_whitelisted.sql:11: ERROR:  0A000: setting configuration parameter "work_mem" not supported
+-- Whitelisted settings work and are visible to SHOW.
+SET application_name = 'p10';
+SHOW application_name;
+ application_name 
+------------------
+ p10
+(1 row)
+
+SET search_path = public;
+SHOW search_path;
+ search_path 
+-------------
+ public
+(1 row)
+
+SET timezone = 'UTC';
+SHOW timezone;
+ TimeZone 
+----------
+ UTC
+(1 row)
+
+SET datestyle = 'ISO, MDY';
+SHOW datestyle;
+ DateStyle 
+-----------
+ ISO, MDY
+(1 row)
+
+SET extra_float_digits = 1;
+SET intervalstyle = 'postgres';
+SET enable_seqscan = off;
+SHOW enable_seqscan;
+ enable_seqscan 
+----------------
+ off
+(1 row)
+
+RESET enable_seqscan;

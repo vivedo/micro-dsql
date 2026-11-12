@@ -1,0 +1,93 @@
+DROP PUBLICATION IF EXISTS p20_pub;
+DROP DOMAIN IF EXISTS p20_dom;
+DROP MATERIALIZED VIEW IF EXISTS p20_mv;
+DROP TABLE IF EXISTS p20_part;
+DROP TABLE IF EXISTS p20_excl;
+DROP FUNCTION IF EXISTS p20_sqlfn();
+DROP FUNCTION IF EXISTS p20_trgfn();
+DROP PROCEDURE IF EXISTS p20_proc();
+DROP TYPE IF EXISTS p20_mood;
+DROP TYPE IF EXISTS p20_pair;
+DROP TABLE IF EXISTS p20_t;
+CREATE TABLE p20_t (a int PRIMARY KEY);
+CREATE DATABASE p20_db;
+psql:20_denylist.sql:19: ERROR:  0A000: CREATE DATABASE is not supported
+CREATE TYPE p20_mood AS ENUM ('sad');
+psql:20_denylist.sql:20: ERROR:  0A000: CREATE TYPE is not supported
+CREATE TYPE p20_pair AS (a int, b int);
+psql:20_denylist.sql:21: ERROR:  0A000: CREATE TYPE is not supported
+CREATE FUNCTION p20_trgfn() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RETURN NEW; END $$;
+psql:20_denylist.sql:22: ERROR:  0A000: LANGUAGE plpgsql is not supported
+CREATE TRIGGER p20_trg AFTER INSERT ON p20_t FOR EACH ROW EXECUTE FUNCTION p20_trgfn();
+psql:20_denylist.sql:23: ERROR:  0A000: CREATE TRIGGER is not supported
+CREATE PROCEDURE p20_proc() LANGUAGE sql AS $$ SELECT 1 $$;
+psql:20_denylist.sql:24: ERROR:  0A000: CREATE PROCEDURE is not supported
+CREATE FUNCTION p20_c() RETURNS int LANGUAGE C AS 'x';
+psql:20_denylist.sql:25: ERROR:  0A000: LANGUAGE C is not supported
+CREATE FUNCTION p20_sqlfn() RETURNS int LANGUAGE sql AS $$ SELECT 1 $$;
+SELECT p20_sqlfn();
+ p20_sqlfn 
+-----------
+         1
+(1 row)
+
+-- COPY ... FROM STDIN would make psql read the rest of this file as data.
+COPY p20_t TO STDOUT;
+psql:20_denylist.sql:29: ERROR:  0A000: COPY is not supported
+LISTEN p20_chan;
+psql:20_denylist.sql:30: ERROR:  0A000: LISTEN is not supported
+NOTIFY p20_chan;
+psql:20_denylist.sql:31: ERROR:  0A000: NOTIFY is not supported
+UNLISTEN p20_chan;
+psql:20_denylist.sql:32: ERROR:  0A000: UNLISTEN is not supported
+DO $$ BEGIN NULL; END $$;
+psql:20_denylist.sql:33: ERROR:  0A000: DO is not supported
+BEGIN;
+LOCK TABLE p20_t IN ACCESS EXCLUSIVE MODE;
+psql:20_denylist.sql:35: ERROR:  0A000: LOCK TABLE is not supported
+ROLLBACK;
+SELECT pg_advisory_lock(1);
+ pg_advisory_lock 
+------------------
+ 
+(1 row)
+
+CREATE MATERIALIZED VIEW p20_mv AS SELECT 1 AS a;
+psql:20_denylist.sql:38: ERROR:  0A000: materialized views is not supported
+CREATE TABLE p20_part (a int) PARTITION BY RANGE (a);
+psql:20_denylist.sql:39: ERROR:  0A000: table partitioning is not supported
+CREATE TABLE p20_excl (a int, EXCLUDE (a WITH =));
+psql:20_denylist.sql:40: ERROR:  0A000: the EXCLUDE constraint is not supported
+CREATE RULE p20_rule AS ON DELETE TO p20_t DO INSTEAD NOTHING;
+psql:20_denylist.sql:41: ERROR:  0A000: CREATE RULE is not supported
+CREATE DOMAIN p20_dom AS int;
+psql:20_denylist.sql:42: ERROR:  0A000: CREATE DOMAIN is not supported
+CREATE TABLESPACE p20_ts LOCATION '/tmp/p20';
+psql:20_denylist.sql:43: ERROR:  0A000: CREATE TABLESPACE is not supported
+CREATE PUBLICATION p20_pub FOR ALL TABLES;
+psql:20_denylist.sql:44: ERROR:  0A000: CREATE PUBLICATION is not supported
+VACUUM p20_t;
+psql:20_denylist.sql:45: ERROR:  0A000: VACUUM is not supported
+VACUUM FULL ANALYZE p20_t;
+psql:20_denylist.sql:46: ERROR:  0A000: VACUUM is not supported
+REINDEX TABLE p20_t;
+psql:20_denylist.sql:47: ERROR:  0A000: REINDEX is not supported
+CLUSTER p20_t USING p20_t_pkey;
+psql:20_denylist.sql:48: ERROR:  0A000: CLUSTER is not supported
+ALTER SYSTEM SET work_mem = '4MB';
+psql:20_denylist.sql:49: ERROR:  0A000: ALTER SYSTEM is not supported
+DECLARE p20_cur CURSOR FOR SELECT 1;
+psql:20_denylist.sql:50: ERROR:  25P01: DECLARE CURSOR can only be used in transaction blocks
+PREPARE TRANSACTION 'p20_gid';
+psql:20_denylist.sql:51: ERROR:  0A000: prepared transactions is not supported
+DROP PUBLICATION IF EXISTS p20_pub;
+DROP DOMAIN IF EXISTS p20_dom;
+DROP MATERIALIZED VIEW IF EXISTS p20_mv;
+DROP TABLE IF EXISTS p20_part;
+DROP TABLE IF EXISTS p20_excl;
+DROP FUNCTION IF EXISTS p20_sqlfn();
+DROP FUNCTION IF EXISTS p20_trgfn();
+DROP PROCEDURE IF EXISTS p20_proc();
+DROP TYPE IF EXISTS p20_mood;
+DROP TYPE IF EXISTS p20_pair;
+DROP TABLE IF EXISTS p20_t;

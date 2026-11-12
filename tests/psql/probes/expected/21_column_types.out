@@ -1,0 +1,44 @@
+CREATE TABLE p21_money (id int, c money);
+psql:21_column_types.sql:7: ERROR:  0A000: type "money" is not supported
+CREATE TABLE p21_xml (id int, c xml);
+psql:21_column_types.sql:8: ERROR:  0A000: type "xml" is not supported
+CREATE TABLE p21_inet (id int, c inet);
+psql:21_column_types.sql:9: ERROR:  0A000: type "inet" is not supported
+CREATE TABLE p21_arr (id int, c int[]);
+psql:21_column_types.sql:10: ERROR:  0A000: type "int[]" is not supported
+CREATE TABLE p21_point (id int, c point);
+psql:21_column_types.sql:11: ERROR:  0A000: type "point" is not supported
+CREATE TABLE p21_bit (id int, c bit(8));
+psql:21_column_types.sql:12: ERROR:  0A000: type "bit(8)" is not supported
+DROP TABLE IF EXISTS p21_ok;
+CREATE TABLE p21_ok (id int PRIMARY KEY, n numeric, d numeric(10,2), j jsonb, u uuid, tz timetz, iv interval, b bytea, t timestamptz);
+SELECT attname, format_type(atttypid, atttypmod) AS type
+  FROM pg_attribute WHERE attrelid = 'p21_ok'::regclass AND attnum > 0 AND NOT attisdropped
+  ORDER BY attnum;
+ attname |           type           
+---------+--------------------------
+ id      | integer
+ n       | numeric
+ d       | numeric(10,2)
+ j       | jsonb
+ u       | uuid
+ tz      | time with time zone
+ iv      | interval
+ b       | bytea
+ t       | timestamp with time zone
+(9 rows)
+
+-- Arrays are allowed at query time.
+SELECT ARRAY[1, 2, 3] AS arr, '10.0.0.1'::inet AS addr;
+   arr   |   addr   
+---------+----------
+ {1,2,3} | 10.0.0.1
+(1 row)
+
+DROP TABLE IF EXISTS p21_money;
+DROP TABLE IF EXISTS p21_xml;
+DROP TABLE IF EXISTS p21_inet;
+DROP TABLE IF EXISTS p21_arr;
+DROP TABLE IF EXISTS p21_point;
+DROP TABLE IF EXISTS p21_bit;
+DROP TABLE IF EXISTS p21_ok;

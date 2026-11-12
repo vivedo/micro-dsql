@@ -1,0 +1,28 @@
+SHOW dsql.enable_batched_nestloop;
+ dsql.enable_batched_nestloop 
+------------------------------
+ on
+(1 row)
+
+SET dsql.enable_batched_nestloop = off;
+SHOW dsql.enable_batched_nestloop;
+ dsql.enable_batched_nestloop 
+------------------------------
+ off
+(1 row)
+
+SET dsql.enable_batched_nestloop = banana;
+psql:23_dsql_settings.sql:10: ERROR:  22023: parameter "dsql.enable_batched_nestloop" requires a Boolean value
+SET dsql.enable_batched_nestloop = on, off;
+psql:23_dsql_settings.sql:11: ERROR:  22023: SET dsql.enable_batched_nestloop takes only one argument
+RESET dsql.enable_batched_nestloop;
+SET dsql.bogus = 1;
+psql:23_dsql_settings.sql:13: ERROR:  42602: invalid configuration parameter name "dsql.bogus"
+DETAIL:  "dsql" is a reserved prefix.
+SELECT set_config('dsql.bogus', '1', false);
+psql:23_dsql_settings.sql:14: ERROR:  42602: invalid configuration parameter name "dsql.bogus"
+DETAIL:  "dsql" is a reserved prefix.
+SET enable_hashjoin = off;
+RESET default_statistics_target;
+SELECT set_config('default_statistics_target', '50', false);
+psql:23_dsql_settings.sql:17: ERROR:  0A000: setting configuration parameter "default_statistics_target" not supported

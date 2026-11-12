@@ -1,0 +1,34 @@
+DROP TABLE IF EXISTS p04_t;
+CREATE TABLE p04_t (id int PRIMARY KEY, v text, w int);
+INSERT INTO p04_t VALUES (1, 'a', 10), (2, 'b', 20);
+CREATE INDEX p04_plain ON p04_t (v);
+psql:04_create_index_async.sql:9: ERROR:  0A000: unsupported mode. please use CREATE INDEX ASYNC.
+CREATE INDEX ASYNC p04_v ON p04_t (v) \gset
+SELECT length(:'job_id') AS job_id_length, :'job_id' ~ '^[a-z0-9]+$' AS job_id_is_base32;
+ job_id_length | job_id_is_base32 
+---------------+------------------
+            26 | t
+(1 row)
+
+SELECT sys.wait_for_job(:'job_id') AS wait_for_job;
+ wait_for_job 
+--------------
+ t
+(1 row)
+
+CREATE UNIQUE INDEX ASYNC p04_w ON p04_t (w) \gset
+SELECT sys.wait_for_job(:'job_id') AS wait_for_job;
+ wait_for_job 
+--------------
+ t
+(1 row)
+
+SELECT indexname FROM pg_indexes WHERE tablename = 'p04_t' ORDER BY indexname;
+ indexname  
+------------
+ p04_t_pkey
+ p04_v
+ p04_w
+(3 rows)
+
+DROP TABLE p04_t;

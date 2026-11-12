@@ -1,0 +1,23 @@
+ inside_txn 
+------------
+          2
+(1 row)
+
+ id |     v     
+----+-----------
+  1 | committed
+(1 row)
+
+psql:20_txn.sql:19: ERROR:  22012
+psql:20_txn.sql:20: ERROR:  25P02
+psql:20_txn.sql:21: ERROR:  25P02
+ id |     v     
+----+-----------
+  1 | committed
+(1 row)
+
+ rr_rows 
+---------
+       1
+(1 row)
+

@@ -1,0 +1,47 @@
+DROP TABLE IF EXISTS p26_t;
+CREATE TABLE p26_t (id int PRIMARY KEY, s text);
+INSERT INTO p26_t VALUES (1, 'a'), (2, 'b');
+BEGIN;
+SELECT s FROM p26_t WHERE id = 1 FOR UPDATE;
+ s 
+---
+ a
+(1 row)
+
+SELECT s FROM p26_t WHERE s = 'b' FOR UPDATE;
+ s 
+---
+ b
+(1 row)
+
+SELECT s FROM p26_t WHERE id = 1 FOR KEY SHARE;
+ s 
+---
+ a
+(1 row)
+
+COMMIT;
+SELECT s FROM p26_t WHERE id = 1 FOR UPDATE NOWAIT;
+ s 
+---
+ a
+(1 row)
+
+SELECT s FROM p26_t WHERE id = 1 FOR UPDATE SKIP LOCKED;
+ s 
+---
+ a
+(1 row)
+
+SELECT s FROM p26_t WHERE id = 1 FOR SHARE;
+psql:26_locking_reads.sql:17: ERROR:  0A000: locking clauses other than FOR UPDATE/FOR KEY SHARE are not supported
+SELECT s FROM p26_t WHERE id = 1 FOR NO KEY UPDATE;
+psql:26_locking_reads.sql:18: ERROR:  0A000: locking clauses other than FOR UPDATE/FOR KEY SHARE are not supported
+WITH x AS (SELECT s FROM p26_t WHERE id = 1 FOR SHARE) SELECT * FROM x;
+psql:26_locking_reads.sql:19: ERROR:  0A000: locking clauses other than FOR UPDATE/FOR KEY SHARE are not supported
+SELECT s FROM p26_t WHERE s = 'FOR SHARE';
+ s 
+---
+(0 rows)
+
+DROP TABLE p26_t;

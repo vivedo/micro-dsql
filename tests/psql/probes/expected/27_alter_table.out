@@ -1,0 +1,52 @@
+DROP TABLE IF EXISTS p27_child;
+DROP TABLE IF EXISTS p27_t;
+CREATE TABLE p27_t (id int PRIMARY KEY, a int, b text);
+CREATE TABLE p27_child (id int PRIMARY KEY, parent int);
+INSERT INTO p27_t VALUES (1, 1, 'x');
+ALTER TABLE p27_t ADD COLUMN c int;
+ALTER TABLE p27_t ADD COLUMN d int DEFAULT 0;
+psql:27_alter_table.sql:13: ERROR:  0A000: ALTER TABLE ADD COLUMN with constraint not supported
+ALTER TABLE p27_t ADD COLUMN e text NOT NULL;
+psql:27_alter_table.sql:14: ERROR:  0A000: ALTER TABLE ADD COLUMN with constraint not supported
+ALTER TABLE p27_t ALTER COLUMN a TYPE bigint;
+psql:27_alter_table.sql:15: ERROR:  0A000: ALTER COLUMN TYPE is not supported
+ALTER TABLE p27_t ALTER COLUMN b SET NOT NULL;
+psql:27_alter_table.sql:16: ERROR:  0A000: SET NOT NULL is not supported (only DROP NOT NULL)
+ALTER TABLE p27_t ALTER COLUMN b SET DEFAULT 'z';
+ALTER TABLE p27_t ALTER COLUMN b DROP DEFAULT;
+ALTER TABLE p27_t RENAME COLUMN c TO c2;
+ALTER TABLE p27_t DROP COLUMN c2;
+ALTER TABLE p27_t DROP COLUMN id;
+psql:27_alter_table.sql:21: ERROR:  0A000: cannot drop primary key column id
+ALTER TABLE p27_t ADD CONSTRAINT p27_chk CHECK (a > 0);
+psql:27_alter_table.sql:22: ERROR:  0A000: unsupported ALTER TABLE ADD CONSTRAINT statement
+ALTER TABLE p27_t ADD CONSTRAINT p27_chk CHECK (a > 0) NOT VALID;
+ALTER TABLE ASYNC p27_t VALIDATE CONSTRAINT p27_chk \gset
+SELECT sys.wait_for_job(:'job_id') AS validate_job;
+ wait_for_job 
+--------------
+ t
+(1 row)
+
+ALTER TABLE p27_child ADD CONSTRAINT p27_fk FOREIGN KEY (parent) REFERENCES p27_t (id);
+psql:27_alter_table.sql:26: ERROR:  0A000: unsupported ALTER TABLE ADD CONSTRAINT statement
+ALTER TABLE p27_child ADD CONSTRAINT p27_fk FOREIGN KEY (parent) REFERENCES p27_t (id) NOT VALID;
+INSERT INTO p27_child VALUES (1, 99);
+psql:27_alter_table.sql:28: ERROR:  23503: insert or update on table "p27_child" violates foreign key constraint "p27_fk"
+DETAIL:  Key (parent)=(99) is not present in table "p27_t".
+SCHEMA NAME:  public
+TABLE NAME:  p27_child
+CONSTRAINT NAME:  p27_fk
+ALTER TABLE p27_t ADD CONSTRAINT p27_uq UNIQUE (a);
+psql:27_alter_table.sql:29: ERROR:  0A000: unsupported ALTER TABLE ADD CONSTRAINT statement
+ALTER TABLE p27_t DROP CONSTRAINT p27_chk;
+SELECT attname FROM pg_attribute WHERE attrelid = 'p27_t'::regclass AND attnum > 0 AND NOT attisdropped ORDER BY attnum;
+ attname 
+---------
+ id
+ a
+ b
+(3 rows)
+
+DROP TABLE IF EXISTS p27_child;
+DROP TABLE IF EXISTS p27_t;

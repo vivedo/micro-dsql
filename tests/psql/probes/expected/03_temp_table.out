@@ -1,0 +1,9 @@
+CREATE TEMP TABLE p03_tmp (a int);
+psql:03_temp_table.sql:6: ERROR:  0A000: temporary/unlogged tables is not supported
+CREATE TEMPORARY TABLE p03_tmp2 (a int);
+psql:03_temp_table.sql:7: ERROR:  0A000: temporary/unlogged tables is not supported
+CREATE UNLOGGED TABLE p03_unlogged (a int);
+psql:03_temp_table.sql:8: ERROR:  0A000: temporary/unlogged tables is not supported
+CREATE TEMP VIEW p03_tv AS SELECT 1 AS a;
+DROP TABLE IF EXISTS p03_tmp, p03_tmp2, p03_unlogged;
+DROP VIEW IF EXISTS p03_tv;
