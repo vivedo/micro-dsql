@@ -10,6 +10,14 @@ use pg_query::NodeEnum;
 use crate::ddl_rules;
 use crate::rewrite::{scan_positions, AsyncKind};
 
+impl JobAction {
+    /// Whether the server answers with rows under a command tag of its own (`CREATE INDEX`,
+    /// `ALTER TABLE`, `CALL`) rather than as a plain query result.
+    pub fn has_own_command_tag(&self) -> bool {
+        !matches!(self, JobAction::MajorVersion { .. })
+    }
+}
+
 /// Where the job id of a `CALL sys.wait_for_job(...)` comes from.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum JobIdSource {

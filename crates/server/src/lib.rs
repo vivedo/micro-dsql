@@ -81,8 +81,8 @@ use turso_pg_parser::ParseResult;
 
 use micro_dsql_policy::params::Column;
 use micro_dsql_policy::{
-    ColumnType, ParamHint, PolicyError, PolicyLimits, ReplyColumn, ResultHint, SessionPolicy,
-    SettingCommand, StatementPlan, TxnStatus,
+    ColumnType, JobAction, ParamHint, PolicyError, PolicyLimits, ReplyColumn, ResultHint,
+    SessionPolicy, SettingCommand, StatementPlan, TxnStatus,
 };
 
 use pgwire::api::portal::{Format, Portal};
@@ -460,6 +460,40 @@ impl SimpleQueryHandler for TursoPgHandler {
 }
 
 impl TursoPgHandler {
+    /// `Execute` for a statement answered with rows under its own command tag: pgwire's
+    /// `_on_execute` with the one difference that the tag is sent as it is, without a row count
+    /// (a portal for such a statement is never suspended: it has one row).
+    async fn execute_with_own_tag<C>(&self, client: &mut C, message: Execute) -> PgWireResult<()>
+    where
+        C: ClientInfo + ClientPortalStore + Sink<PgWireBackendMessage> + Unpin + Send + Sync,
+        C::PortalStore: PortalStore<Statement = PgStatement>,
+        C::Error: Debug,
+        PgWireError: From<<C as Sink<PgWireBackendMessage>>::Error>,
+    {
+        if !matches!(client.state(), PgWireConnectionState::ReadyForQuery) {
+            return Err(PgWireError::NotReadyForQuery);
+        }
+        let transaction_status = client.transaction_status();
+        client.set_state(PgWireConnectionState::QueryInProgress);
+        let name = message.name.as_deref().unwrap_or(pgwire::api::DEFAULT_NAME);
+        let Some(portal) = client.portal_store().get_portal(name) else {
+            return Err(PgWireError::PortalNotFound(name.to_owned()));
+        };
+        match ExtendedQueryHandler::do_query(self, client, portal.as_ref(), 0).await? {
+            Response::Query(mut results) => {
+                send_rows_with_own_tag(client, &mut results, false).await?;
+            }
+            Response::Execution(tag) => send_execution_response(client, tag).await?,
+            _ => unreachable!("job statements answer with rows"),
+        }
+        if name == pgwire::api::DEFAULT_NAME {
+            client.portal_store().rm_portal(name);
+        }
+        client.set_state(PgWireConnectionState::ReadyForQuery);
+        client.set_transaction_status(transaction_status);
+        Ok(())
+    }
+
     async fn run_simple_query<C>(&self, client: &mut C, query: Query) -> PgWireResult<()>
     where
         C: ClientInfo + ClientPortalStore + Sink<PgWireBackendMessage> + Unpin + Send + Sync,
@@ -507,6 +541,9 @@ impl TursoPgHandler {
                     error,
                 } => send_copy_out(client, column_count, rows, error).await?,
                 outcome => match outcome.into_response() {
+                    Response::Query(mut result) if result.command_tag() != "SELECT" => {
+                        send_rows_with_own_tag(client, &mut result, true).await?
+                    }
                     Response::Query(mut result) => {
                         send_query_response(client, &mut result, true).await?
                     }
@@ -566,6 +603,42 @@ fn run_simple_statement(
             execute_query(&mut stmt, header)
         }
     })
+}
+
+/// Sends a result set and completes it with the result's command tag as it is, where pgwire's
+/// `send_query_response` appends the number of rows (`SELECT` -> `SELECT 1`).
+async fn send_rows_with_own_tag<C>(
+    client: &mut C,
+    results: &mut QueryResponse,
+    send_describe: bool,
+) -> PgWireResult<()>
+where
+    C: Sink<PgWireBackendMessage> + Unpin,
+    C::Error: Debug,
+    PgWireError: From<<C as Sink<PgWireBackendMessage>>::Error>,
+{
+    use futures::StreamExt;
+    let tag = results.command_tag().to_owned();
+    let schema = results.row_schema();
+    let rows = results.data_rows();
+    if send_describe {
+        client
+            .send(PgWireBackendMessage::RowDescription(
+                pgwire::messages::data::RowDescription::new(
+                    schema.iter().map(Into::into).collect(),
+                ),
+            ))
+            .await?;
+    }
+    while let Some(row) = rows.next().await {
+        client.feed(PgWireBackendMessage::DataRow(row?)).await?;
+    }
+    client
+        .send(PgWireBackendMessage::CommandComplete(
+            pgwire::messages::response::CommandComplete::new(tag),
+        ))
+        .await?;
+    Ok(())
 }
 
 fn show_fields(column: &str, format: &Format) -> Vec<FieldInfo> {
@@ -699,11 +772,22 @@ impl ExtendedQueryHandler for TursoPgHandler {
         C::Error: Debug,
         PgWireError: From<<C as Sink<PgWireBackendMessage>>::Error>,
     {
-        let sql = client
+        let plan = client
             .portal_store()
             .get_portal(message.name.as_deref().unwrap_or(pgwire::api::DEFAULT_NAME))
-            .map(|portal| portal.statement.statement.plan.original.clone());
-        let result = self._on_execute(client, message).await;
+            .map(|portal| portal.statement.statement.plan.clone());
+        let sql = plan.as_ref().map(|plan| plan.original.clone());
+        // pgwire appends the row count to every result's command tag; the job statements need
+        // `CREATE INDEX`, `ALTER TABLE` and `CALL` without it (M3).
+        let own_tag = plan
+            .as_ref()
+            .and_then(|plan| plan.job.as_ref())
+            .is_some_and(JobAction::has_own_command_tag);
+        let result = if own_tag {
+            self.execute_with_own_tag(client, message).await
+        } else {
+            self._on_execute(client, message).await
+        };
         let status = wire_transaction_status(&self.conn);
         finish_query(client, result, true, status, sql.as_deref()).await
     }
