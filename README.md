@@ -50,6 +50,28 @@ What a client sees: database `postgres`, `server_version` 16.x, `TimeZone` `UTC`
 `is_superuser` `off`, no TLS (an SSL request is answered "no"), no password check, Postgres
 SQLSTATEs on errors, and DSQL's only isolation level (`REPEATABLE READ`).
 
+### DSQL rules
+
+Code that would break on DSQL breaks here, with DSQL's SQLSTATE and message:
+
+- **Conflicts**: a write conflict is `40001` `change conflicts with another transaction (OC000)`
+  (also when the engine reports lock contention, `55P03`); a concurrent schema change is `40001`
+  `schema has been updated by another transaction (OC001)`.
+- **Transactions**: one DDL statement per transaction, no DDL and DML in the same transaction,
+  no savepoints, at most 3,000 changed rows and 300 s per transaction (`54000`). A query string
+  with several statements is checked as one implicit transaction. A refusal inside a
+  transaction aborts it (`25P02` until `ROLLBACK`).
+- **Statements DSQL does not have** are refused with `0A000` (`TRUNCATE`, `CREATE TYPE`,
+  `CREATE TEMP TABLE`, `COPY`, `serial`, arrays, `inet`, `money`, triggers, extensions, `LOCK`,
+  ...).
+- **Settings**: only DSQL's session parameters can be set (`application_name`, `client_encoding`,
+  `datestyle`, `extra_float_digits`, `intervalstyle`, `timezone`, `search_path`, the `enable_*`
+  planner switches and `dsql.enable_batched_nestloop`); anything else is `0A000`. `SHOW` returns
+  what was set.
+- **DDL**: a column typed bare `numeric` or `decimal` is `numeric(18,6)`.
+
+Raise the log level to `debug` to see one line per refused statement with the rule id.
+
 ## Development
 
 Needs Rust (stable) and clang/libclang (Xcode command line tools on macOS,
